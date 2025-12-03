@@ -2,6 +2,7 @@ from typing import List, Dict
 from datetime import datetime
 import os
 import logging
+import json
 
 # Firebase Admin SDK
 import firebase_admin
@@ -9,6 +10,8 @@ from firebase_admin import credentials, firestore
 
 # Configurazione
 KEY_FILE_NAME = 'safeguard-c08.json'
+
+ENV_CREDENTIALS_VAR = 'FIREBASE_CREDENTIALS_JSON'
 
 # Costruzione del percorso assoluto del file chiave
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,16 +28,36 @@ class FirestoreRepository:
         self.db_client = self._initialize_firebase()
 
     def _initialize_firebase(self):
-        """Tenta di inizializzare l'SDK Admin e ottenere il client Firestore."""
+        """
+        Tenta di inizializzare l'SDK Admin.
+        Priorità: 1. Variabile d'ambiente JSON (Cloud); 2. File locale (Sviluppo).
+        """
         try:
-            cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-            firebase_admin.initialize_app(cred)
-            print("FIREBASE REPO: Connessione Firestore inizializzata.")
+            # 1. Tenta di leggere la configurazione dalla variabile d'ambiente
+            credentials_json_str = os.environ.get(ENV_CREDENTIALS_VAR)
+
+            if credentials_json_str:
+                # Autenticazione usando il contenuto JSON iniettato
+                service_account_info = json.loads(credentials_json_str)
+                cred = credentials.Certificate.from_service_account_info(service_account_info)
+                print(f"FIREBASE REPO: Connessione Firestore inizializzata tramite {ENV_CREDENTIALS_VAR}.")
+                firebase_admin.initialize_app(cred)
+            else:
+                # 2. Fallback: Usa il file locale (necessario solo in locale)
+                cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+                firebase_admin.initialize_app(cred)
+                print("FIREBASE REPO: Connessione Firestore inizializzata tramite file chiave locale.")
+
+            # Se l'inizializzazione ha successo, restituisce il client
             return firestore.client()
+
         except FileNotFoundError:
-            logging.warning("FIREBASE REPO: Chiave di servizio non trovata. Persistenza disattivata.")
+            logging.warning(f"FIREBASE REPO: Chiave di servizio locale '{KEY_FILE_NAME}' non trovata. Persistenza disattivata.")
+        except json.JSONDecodeError as e:
+            logging.error(f"FIREBASE REPO: Errore nel parsing JSON di {ENV_CREDENTIALS_VAR}: {e}")
         except Exception as e:
             logging.error(f"FIREBASE REPO: Errore inizializzazione: {e}")
+
         return None
 
     def save_hotspots(self, hotspots_list: List[Dict], hotspot_radius: float):
