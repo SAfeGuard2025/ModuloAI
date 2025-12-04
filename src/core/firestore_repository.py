@@ -39,7 +39,7 @@ class FirestoreRepository:
             if credentials_json_str:
                 # Autenticazione usando il contenuto JSON iniettato
                 service_account_info = json.loads(credentials_json_str)
-                cred = credentials.Certificate.from_service_account_info(service_account_info)
+                cred = credentials.Certificate(service_account_info)
                 print(f"FIREBASE REPO: Connessione Firestore inizializzata tramite {ENV_CREDENTIALS_VAR}.")
                 firebase_admin.initialize_app(cred)
             else:
