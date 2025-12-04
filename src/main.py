@@ -1,6 +1,6 @@
 # src/main.py
 from fastapi import FastAPI
-from api.routes import router
+from .api.routes import router
 
 app = FastAPI(title="Emergency AI Module", version="1.0.0")
 
