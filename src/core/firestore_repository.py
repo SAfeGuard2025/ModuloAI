@@ -39,20 +39,28 @@ class FirestoreRepository:
             if credentials_json_str:
                 # Autenticazione usando il contenuto JSON iniettato
                 service_account_info = json.loads(credentials_json_str)
+
                 cred = credentials.Certificate(service_account_info)
+
                 print(f"FIREBASE REPO: Connessione Firestore inizializzata tramite {ENV_CREDENTIALS_VAR}.")
-                firebase_admin.initialize_app(cred)
+                # Verifica se l'app è già inizializzata
+                if not firebase_admin._apps:
+                    firebase_admin.initialize_app(cred)
             else:
                 # 2. Fallback: Usa il file locale (necessario solo in locale)
-                cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-                firebase_admin.initialize_app(cred)
-                print("FIREBASE REPO: Connessione Firestore inizializzata tramite file chiave locale.")
+                if os.path.exists(SERVICE_ACCOUNT_PATH):
+                    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+                    print("FIREBASE REPO: Connessione Firestore inizializzata tramite file chiave locale.")
+                    if not firebase_admin._apps:
+                        firebase_admin.initialize_app(cred)
+                else:
+                    logging.warning(f"FIREBASE REPO: Chiave non trovata (Né Env '{ENV_CREDENTIALS_VAR}' né file locale). Persistenza OFF.")
+                    return None
 
-            # Se l'inizializzazione ha successo, restituisce il client
             return firestore.client()
 
         except FileNotFoundError:
-            logging.warning(f"FIREBASE REPO: Chiave di servizio locale '{KEY_FILE_NAME}' non trovata. Persistenza disattivata.")
+            logging.warning(f"FIREBASE REPO: File chiave non trovato. Persistenza disattivata.")
         except json.JSONDecodeError as e:
             logging.error(f"FIREBASE REPO: Errore nel parsing JSON di {ENV_CREDENTIALS_VAR}: {e}")
         except Exception as e:
