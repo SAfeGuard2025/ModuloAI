@@ -21,5 +21,7 @@ COPY src/ ./src/
 # Esponi la porta
 EXPOSE 8000
 
+ENV PYTHONPATH="${PYTHONPATH}:/app/src"
+
 # Comando di avvio (usa uvicorn direttamente da path)
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

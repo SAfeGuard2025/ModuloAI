@@ -6,7 +6,7 @@ import logging
 from core.risk_engine import calculate_impact_zones
 
 # Inizializzazione del Router specifico per gli endpoint API/v1
-router = APIRouter(prefix="/api/v1")
+router = APIRouter()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
