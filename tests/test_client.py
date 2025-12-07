@@ -8,6 +8,7 @@ url = "http://localhost:8080/api/risk/analyze"
 payload = {
     "reports": [
         {
+            "id": 123456,
             "lat": 40.75899247643773,
             "lon": 14.655521310039079,
             "event_type": "Fire",

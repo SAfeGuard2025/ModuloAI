@@ -97,6 +97,7 @@ class RiskModel:
             best_risk_score = 0.0
             is_in_hotspot = False
             matched_hotspot_id = -1
+            report_unique_id = report.get('id')
 
             # 1. Calcolo del Rischio (Itera sugli hotspot esistenti)
             for hotspot in self.hotspots:
@@ -133,6 +134,8 @@ class RiskModel:
             # 3. Formatta il risultato e aggiorna il conteggio rischio alto
             risk_level = 'HIGH' if best_risk_score >= 0.5 else 'LOW'
             if risk_level == 'HIGH': high_risk_reports += 1
+
+            if report_unique_id: report['id'] = report_unique_id
 
             report['risk_level'] = risk_level
             report['risk_score'] = round(best_risk_score * 100, 2)
