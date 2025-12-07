@@ -41,22 +41,64 @@ class RiskModel:
             self._save_hotspots_to_database() # Persiste i risultati tramite il Repository
 
     def _load_historical_data(self):
-        """Carica il dataset CSV e pulisce i dati grezzi."""
+        """
+        Carica i dati storici dal CSV e li integra con i report analizzati in produzione
+        salvati su Firestore, per creare un dataset completo.
+        """
+        print(f"MODEL: Caricamento dati storici dal file: {FILE_NAME}")
+
         try:
-            df = pd.read_csv(DATA_FILE_PATH)
-            # Pulizia e tipizzazione di colonne critiche (Data/Ora, Lat/Lng)
-            df['DataOra_DT'] = pd.to_datetime(df['DataOra'], utc=True)
-            self.df_historical = df.dropna(subset=['lat', 'lng'])
+            # 1. Caricamento del dataset statico iniziale (CSV)
+            df_csv = pd.read_csv(DATA_FILE_PATH)
+
+            # Conversione 'DataOra' in datetime (necessario per DBSCAN e recency)
+            df_csv['DataOra_DT'] = pd.to_datetime(df_csv['DataOra'])
+
+            # Rinomina la colonna 'lng' in 'lon' per uniformità
+            df_csv.rename(columns={'lng': 'lon'}, inplace=True)
+
+            # 2. Caricamento dei report analizzati salvati su Firestore
+            analyzed_reports = self.repository.load_analyzed_reports()
+
+            if analyzed_reports:
+                df_db = pd.DataFrame(analyzed_reports)
+
+                # Prepara le colonne del DB in modo che corrispondano al CSV il più possibile
+                # Usa 'created_at' come DataOra per i report del DB
+                df_db['DataOra_DT'] = pd.to_datetime(df_db['created_at'])
+                df_db['DataOra'] = df_db['DataOra_DT'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                # Seleziona solo le colonne che sono essenziali per il clustering (lat, lon, DataOra_DT)
+                # Il resto dei dati arricchiti (risk_score) non serve al calcolo degli Hotspot
+                cols_to_merge = [
+                    'lat', 'lon', 'DataOra_DT', 'DataOra',
+                    'event_type', 'severity', 'risk_score' # Manteniamo il risk_score a titolo informativo
+                ]
+
+                # 3. Concatenazione dei due dataset
+                # Usiamo ignore_index=True per unire i dataframe con indici diversi
+                self.df_historical = pd.concat([df_csv, df_db[cols_to_merge]], ignore_index=True)
+
+                print(f"MODEL: Dati uniti! Righe CSV: {len(df_csv)} + Righe DB: {len(df_db)} = Totale storico: {len(self.df_historical)}.")
+            else:
+                # Se il DB è vuoto, usa solo il CSV
+                self.df_historical = df_csv
+                print(f"MODEL: Caricamento solo da CSV. Totale righe: {len(self.df_historical)}.")
+
             self.n_historical_rows = len(self.df_historical)
-            print(f"RISK MODEL: Dataset caricato con {self.n_historical_rows} righe.")
+
+        except FileNotFoundError:
+            logging.error(f"MODEL: File CSV storico non trovato in {DATA_FILE_PATH}")
+            self.df_historical = pd.DataFrame()
         except Exception as e:
-            logging.error(f"RISK MODEL: Errore durante il caricamento dati: {e}")
+            logging.error(f"MODEL: Errore durante il caricamento/preparazione dei dati: {e}")
+            self.df_historical = pd.DataFrame()
 
     def _run_dbscan_clustering(self):
         """Esegue il DBSCAN per identificare gli Hotspot (cluster) nel dataset storico."""
         if self.df_historical.empty: return
 
-        coords = self.df_historical[['lat', 'lng']].values
+        coords = self.df_historical[['lat', 'lon']].values
         kms_per_radian = 6371.0088
         # Conversione del raggio (KM) in radianti per la metrica Haversine
         epsilon = HOTSPOT_RADIUS_KM / kms_per_radian
@@ -74,7 +116,7 @@ class RiskModel:
                 self.hotspots.append({
                     'id': int(cluster_id),
                     'center_lat': float(cluster_data['lat'].mean()),
-                    'center_lng': float(cluster_data['lng'].mean()),
+                    'center_lng': float(cluster_data['lon'].mean()),
                     'size': int(len(cluster_data)) # Densità (punti nel cluster)
                 })
         print(f"RISK MODEL: Identificati {len(self.hotspots)} Hotspot.")
@@ -144,7 +186,7 @@ class RiskModel:
             # 4. Aggiorna lo Storico in Memoria (preparazione riga)
             now_utc = pd.Timestamp.now(tz='UTC')
             new_row = {
-                'lat': report['lat'], 'lng': report['lon'],
+                'lat': report['lat'], 'lon': report['lon'],
                 'DataOra_DT': now_utc, 'cluster': matched_hotspot_id,
                 'DataOra': now_utc.strftime('%Y-%m-%d %H:%M:%S'),
                 'event_type': report.get('event_type'), 'severity': report.get('severity')
@@ -166,6 +208,8 @@ class RiskModel:
             self.df_historical = pd.concat([self.df_historical, df_new_reports[cols_to_use]], ignore_index=True)
             self.n_historical_rows = len(self.df_historical)
 
+        # Questo garantisce che i dati siano persistenti e disponibili per futuri calcoli.
+        self.repository.save_analyzed_reports(reports)
 
         return {
             "status": "ANALYSIS_COMPLETE",

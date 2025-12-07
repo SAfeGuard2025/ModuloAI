@@ -18,6 +18,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_ACCOUNT_PATH = os.path.join(BASE_DIR, KEY_FILE_NAME)
 
 COLLECTION_NAME = 'risk_areas'
+REPORTS_COLLECTION = 'analyzed_reports'
 
 class FirestoreRepository:
     """
@@ -98,3 +99,67 @@ class FirestoreRepository:
             print("FIREBASE REPO: Salvataggio Hotspot completato con successo.")
         except Exception as e:
             logging.error(f"FIREBASE REPO: Errore durante il commit del batch: {e}")
+
+    def load_analyzed_reports(self) -> List[Dict]:
+        """Recupera tutti i report dalla collezione 'analyzed_reports'."""
+        if not self.db_client:
+            print("FIREBASE REPO: Caricamento report analizzati saltato (DB non connesso).")
+            return []
+
+        print(f"FIREBASE REPO: Avvio caricamento report analizzati dalla collezione '{REPORTS_COLLECTION}'...")
+        reports_list = []
+        try:
+            # Recupera tutti i documenti nella collezione dei report analizzati
+            docs = self.db_client.collection(REPORTS_COLLECTION).stream()
+
+            for doc in docs:
+                data = doc.to_dict()
+                reports_list.append(data)
+
+            print(f"FIREBASE REPO: Caricati {len(reports_list)} report analizzati da Firestore.")
+            return reports_list
+
+        except Exception as e:
+            logging.error(f"FIREBASE REPO: Errore nel caricamento dei report analizzati: {e}")
+            return []
+
+    # Metodo per salvare le segnalazioni analizzate utile per l apprendimento dell ai
+    def save_analyzed_reports(self, analyzed_reports: List[Dict]):
+        """Salva i report analizzati in una collezione dedicata ('analyzed_reports')."""
+        if not self.db_client or not analyzed_reports:
+            print("FIREBASE REPO: Salvataggio report analizzati saltato.")
+            return
+
+        print(f"FIREBASE REPO: Avvio salvataggio di {len(analyzed_reports)} report analizzati...")
+
+        batch = self.db_client.batch()
+        collection_ref = self.db_client.collection(REPORTS_COLLECTION)
+
+        for report in analyzed_reports:
+            # Usa l'ID del report come ID del documento Firestore
+            report_id = report.get('id')
+            if not report_id:
+                continue
+
+            doc_ref = collection_ref.document(str(report_id))
+
+            # Prepara i dati da salvare (Report originale + Risultati AI)
+            data_to_save = {
+                'id': report.get('id'),
+                'lat': report.get('lat'),
+                'lon': report.get('lon'),
+                'event_type': report.get('event_type'),
+                'severity': report.get('severity'),
+                # Risultati dell'analisi AI
+                'risk_level': report.get('risk_level'),
+                'risk_score': report.get('risk_score'),
+                'hotspot_match': report.get('hotspot_match'),
+                'created_at': datetime.utcnow()
+            }
+            batch.set(doc_ref, data_to_save)
+
+        try:
+            batch.commit()
+            print(f"FIREBASE REPO: Salvataggio di {len(analyzed_reports)} report completato con successo.")
+        except Exception as e:
+            logging.error(f"FIREBASE REPO: Errore nel commit dei report: {e}")
