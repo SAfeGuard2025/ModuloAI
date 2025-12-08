@@ -155,6 +155,7 @@ class FirestoreRepository:
             # Usa l'ID del report come ID del documento Firestore
             report_id = report.get('id')
             if not report_id:
+                logging.error(f"FIREBASE REPO: Report scartato per ID mancante/nullo: {report}")
                 continue
 
             doc_ref = collection_ref.document(str(report_id))
