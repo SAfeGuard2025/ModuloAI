@@ -17,6 +17,7 @@ class EmergencyReport(BaseModel):
     Schema del singolo report di emergenza inviato da Dart.
     Assicura che i dati in ingresso siano conformi e tipizzati.
     """
+    id: str = Field(..., description="ID univoco della segnalazione per la tracciabilità.")
     lat: float = Field(..., description="Latitudine del report.")
     lon: float = Field(..., description="Longitudine del report.")
     event_type: str = Field(..., description="Tipo di incidente (es. 'Fire', 'Theft').")
