@@ -37,36 +37,50 @@ class FirestoreRepository:
             # 1. Tenta di leggere la configurazione dalla variabile d'ambiente
             credentials_json_str = os.environ.get(ENV_CREDENTIALS_VAR)
 
+            cred = None
+
+            # Caricamento Credenziali
+
             if credentials_json_str:
-                # Autenticazione usando il contenuto JSON iniettato
+                # Caso Cloud (Variabile d'ambiente)
                 service_account_info = json.loads(credentials_json_str)
-
                 cred = credentials.Certificate(service_account_info)
+                print(f"FIREBASE REPO: Credenziali caricate tramite {ENV_CREDENTIALS_VAR}.")
 
-                print(f"FIREBASE REPO: Connessione Firestore inizializzata tramite {ENV_CREDENTIALS_VAR}.")
-                # Verifica se l'app è già inizializzata
-                if not firebase_admin._apps:
-                    firebase_admin.initialize_app(cred)
+            elif os.path.exists(SERVICE_ACCOUNT_PATH):
+                # Caso Locale (Fallback)
+                cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+                print("FIREBASE REPO: Credenziali caricate tramite file chiave locale.")
+
             else:
-                # 2. Fallback: Usa il file locale (necessario solo in locale)
-                if os.path.exists(SERVICE_ACCOUNT_PATH):
-                    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-                    print("FIREBASE REPO: Connessione Firestore inizializzata tramite file chiave locale.")
-                    if not firebase_admin._apps:
-                        firebase_admin.initialize_app(cred)
+                # Nessuna credenziale trovata
+                logging.warning(f"FIREBASE REPO: Chiave non trovata (Né Env '{ENV_CREDENTIALS_VAR}' né file locale). Persistenza OFF.")
+                return None
+
+
+            # Inizializzazione Firebase App e Client
+
+            if cred:
+                # Inizializza l'app o ottieni l'istanza esistente
+                if not firebase_admin._apps:
+                    app = firebase_admin.initialize_app(cred)
                 else:
-                    logging.warning(f"FIREBASE REPO: Chiave non trovata (Né Env '{ENV_CREDENTIALS_VAR}' né file locale). Persistenza OFF.")
-                    return None
+                    app = firebase_admin.get_app()
 
-            print(f"FIREBASE REPO: CONNESSO AL PROGETTO ID: {app.project_id}")
+                # LOG di Diagnosi
+                print(f"FIREBASE REPO: CONNESSO AL PROGETTO ID: {app.project_id}")
 
-            return firestore.client()
+                # Restituisce il client Firestore
+                return firestore.client()
+
+            return None
 
         except FileNotFoundError:
             logging.warning(f"FIREBASE REPO: File chiave non trovato. Persistenza disattivata.")
         except json.JSONDecodeError as e:
             logging.error(f"FIREBASE REPO: Errore nel parsing JSON di {ENV_CREDENTIALS_VAR}: {e}")
         except Exception as e:
+            # Cattura qualsiasi altro errore di inizializzazione/autenticazione
             logging.error(f"FIREBASE REPO: Errore inizializzazione: {e}")
 
         return None
