@@ -141,6 +141,10 @@ class RiskModel:
             matched_hotspot_id = -1
             report_unique_id = report.get('id')
 
+            if not report_unique_id:
+                logging.warning("MODEL: Report scartato in fase di analisi: ID non fornito.")
+                continue
+
             # 1. Calcolo del Rischio (Itera sugli hotspot esistenti)
             for hotspot in self.hotspots:
                 hotspot_coords = (hotspot['center_lat'], hotspot['center_lng'])
@@ -179,6 +183,7 @@ class RiskModel:
 
             if report_unique_id: report['id'] = report_unique_id
 
+            report['id'] = report_unique_id
             report['risk_level'] = risk_level
             report['risk_score'] = round(best_risk_score * 100, 2)
             report['hotspot_match'] = is_in_hotspot
@@ -186,6 +191,7 @@ class RiskModel:
             # 4. Aggiorna lo Storico in Memoria (preparazione riga)
             now_utc = pd.Timestamp.now(tz='UTC')
             new_row = {
+                'id': report_unique_id,
                 'lat': report['lat'], 'lon': report['lon'],
                 'DataOra_DT': now_utc, 'cluster': matched_hotspot_id,
                 'DataOra': now_utc.strftime('%Y-%m-%d %H:%M:%S'),
@@ -204,8 +210,7 @@ class RiskModel:
         if new_historical_rows:
             df_new_reports = pd.DataFrame(new_historical_rows)
             # Assicura che vengano usate solo colonne presenti nello storico
-            cols_to_use = [col for col in df_new_reports.columns if col in self.df_historical.columns]
-            self.df_historical = pd.concat([self.df_historical, df_new_reports[cols_to_use]], ignore_index=True)
+            self.df_historical = pd.concat([self.df_historical, df_new_reports], ignore_index=True)
             self.n_historical_rows = len(self.df_historical)
 
         # Questo garantisce che i dati siano persistenti e disponibili per futuri calcoli.
