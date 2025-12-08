@@ -58,6 +58,8 @@ class FirestoreRepository:
                     logging.warning(f"FIREBASE REPO: Chiave non trovata (Né Env '{ENV_CREDENTIALS_VAR}' né file locale). Persistenza OFF.")
                     return None
 
+            print(f"FIREBASE REPO: CONNESSO AL PROGETTO ID: {app.project_id}")
+
             return firestore.client()
 
         except FileNotFoundError:
