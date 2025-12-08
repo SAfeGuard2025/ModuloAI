@@ -137,8 +137,6 @@ class RiskModel:
         reports_successfully_analyzed = []
 
         for report in reports:
-            logging.warning(f"MODEL: REPORT DIZIONARIO IN INGRESSO (RAW): {report}")
-
             report_unique_id = report.get('id')
 
             if not report_unique_id:
