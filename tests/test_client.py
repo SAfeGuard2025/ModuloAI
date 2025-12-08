@@ -5,10 +5,10 @@ import json
 url = "http://localhost:8080/api/risk/analyze"
 
 # I dati da inviare
-payload = {
+payload={
     "reports": [
         {
-            "id": 123456,
+            "id": "20251208_001",
             "lat": 40.75899247643773,
             "lon": 14.655521310039079,
             "event_type": "Fire",

@@ -213,6 +213,9 @@ class RiskModel:
             self.df_historical = pd.concat([self.df_historical, df_new_reports], ignore_index=True)
             self.n_historical_rows = len(self.df_historical)
 
+        if reports:
+            logging.info(f"MODEL: Report analizzato (PRE-SAVE): {reports[0]}")
+
         # Questo garantisce che i dati siano persistenti e disponibili per futuri calcoli.
         self.repository.save_analyzed_reports(reports)
 
