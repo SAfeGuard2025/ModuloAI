@@ -134,20 +134,22 @@ class RiskModel:
         new_historical_rows = []
         max_size = max([h['size'] for h in self.hotspots]) if self.hotspots else 1
 
+        reports_successfully_analyzed = []
+
         for report in reports:
             logging.warning(f"MODEL: REPORT DIZIONARIO IN INGRESSO (RAW): {report}")
+
+            report_unique_id = report.get('id')
+
+            if not report_unique_id:
+                logging.error(f"MODEL: Report scartato. ID mancante/nullo, impossibile tracciare: {report}")
+                continue
 
             report_coords = (report['lat'], report['lon'])
             best_risk_score = 0.0
             is_in_hotspot = False
             matched_hotspot_id = -1
             report_unique_id = report.get('id')
-
-            if not report_unique_id:
-                import uuid
-                report['id'] = str(uuid.uuid4())
-                report_unique_id = report['id']
-                logging.warning(f"MODEL: ID mancante. Generato ID temporaneo per analisi: {report_unique_id}")
 
             # 1. Calcolo del Rischio (Itera sugli hotspot esistenti)
             for hotspot in self.hotspots:
@@ -185,12 +187,12 @@ class RiskModel:
             risk_level = 'HIGH' if best_risk_score >= 0.5 else 'LOW'
             if risk_level == 'HIGH': high_risk_reports += 1
 
-            if report_unique_id: report['id'] = report_unique_id
-
             report['id'] = report_unique_id
             report['risk_level'] = risk_level
             report['risk_score'] = round(best_risk_score * 100, 2)
             report['hotspot_match'] = is_in_hotspot
+
+            reports_successfully_analyzed.append(report)
 
             # 4. Aggiorna lo Storico in Memoria (preparazione riga)
             now_utc = pd.Timestamp.now(tz='UTC')
@@ -217,8 +219,8 @@ class RiskModel:
             self.df_historical = pd.concat([self.df_historical, df_new_reports], ignore_index=True)
             self.n_historical_rows = len(self.df_historical)
 
-        if reports:
-            logging.info(f"MODEL: Report analizzato (PRE-SAVE): {reports[0]}")
+        if reports_successfully_analyzed:
+            logging.info(f"MODEL: Report analizzato (PRE-SAVE): {reports_successfully_analyzed[0]}")
 
         # Questo garantisce che i dati siano persistenti e disponibili per futuri calcoli.
         self.repository.save_analyzed_reports(reports)
