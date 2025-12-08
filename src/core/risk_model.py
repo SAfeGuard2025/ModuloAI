@@ -135,6 +135,8 @@ class RiskModel:
         max_size = max([h['size'] for h in self.hotspots]) if self.hotspots else 1
 
         for report in reports:
+            logging.warning(f"MODEL: REPORT DIZIONARIO IN INGRESSO (RAW): {report}")
+
             report_coords = (report['lat'], report['lon'])
             best_risk_score = 0.0
             is_in_hotspot = False
@@ -142,8 +144,10 @@ class RiskModel:
             report_unique_id = report.get('id')
 
             if not report_unique_id:
-                logging.warning("MODEL: Report scartato in fase di analisi: ID non fornito.")
-                continue
+                import uuid
+                report['id'] = str(uuid.uuid4())
+                report_unique_id = report['id']
+                logging.warning(f"MODEL: ID mancante. Generato ID temporaneo per analisi: {report_unique_id}")
 
             # 1. Calcolo del Rischio (Itera sugli hotspot esistenti)
             for hotspot in self.hotspots:
