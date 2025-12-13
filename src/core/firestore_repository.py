@@ -164,14 +164,15 @@ class FirestoreRepository:
             data_to_save = {
                 'id': report.get('id'),
                 'lat': report.get('lat'),
-                'lon': report.get('lon'),
+                'lng': report.get('lon'),
                 'event_type': report.get('event_type'),
                 'severity': report.get('severity'),
                 # Risultati dell'analisi AI
                 'risk_level': report.get('risk_level'),
                 'risk_score': report.get('risk_score'),
                 'hotspot_match': report.get('hotspot_match'),
-                'created_at': datetime.utcnow()
+                'timestamp': datetime.utcnow(),
+                'ai_processed_at': datetime.utcnow().isoformat()
             }
             batch.set(doc_ref, data_to_save)
 

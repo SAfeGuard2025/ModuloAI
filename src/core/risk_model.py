@@ -63,10 +63,17 @@ class RiskModel:
             if analyzed_reports:
                 df_db = pd.DataFrame(analyzed_reports)
 
+                if 'lng' in df_db.columns:
+                    df_db.rename(columns={'lng': 'lon'}, inplace=True)
+
+                if 'type' in df_db.columns:
+                    df_db.rename(columns={'type': 'event_type'}, inplace=True)
+
                 # Prepara le colonne del DB in modo che corrispondano al CSV il più possibile
-                # Usa 'created_at' come DataOra per i report del DB
-                df_db['DataOra_DT'] = pd.to_datetime(df_db['created_at'])
-                df_db['DataOra'] = df_db['DataOra_DT'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                # Usa 'timestamp' come DataOra per i report del DB
+                if 'timestamp' in df_db.columns:
+                    df_db['DataOra_DT'] = pd.to_datetime(df_db['timestamp'])
+                    df_db['DataOra'] = df_db['DataOra_DT'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
                 # Seleziona solo le colonne che sono essenziali per il clustering (lat, lon, DataOra_DT)
                 # Il resto dei dati arricchiti (risk_score) non serve al calcolo degli Hotspot
