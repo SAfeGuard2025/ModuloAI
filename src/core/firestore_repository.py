@@ -106,6 +106,7 @@ class FirestoreRepository:
                 'center_lng': hotspot['center_lng'],
                 'size': hotspot['size'],
                 'radius_km': hotspot_radius,
+                'points': hotspot.get('points', []),
                 'last_updated': now # Timestamp per tracciare l'ultima generazione
             }
             batch.set(doc_ref, data)

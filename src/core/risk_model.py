@@ -11,8 +11,8 @@ import logging
 from core.firestore_repository import FirestoreRepository
 
 # Configurazione del Modello (Logica AI)
-HOTSPOT_RADIUS_KM = 2.7       # Raggio del cluster per DBSCAN
-MIN_DENSITY_POINTS = 3        # Numero minimo di punti per formare un cluster (Hotspot)
+HOTSPOT_RADIUS_KM = 2.2         # Raggio del cluster per DBSCAN
+MIN_DENSITY_POINTS = 8          # Numero minimo di punti per formare un cluster (Hotspot)
 FILE_NAME = '911_campania_geolocated.csv'
 
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), FILE_NAME)
@@ -114,19 +114,31 @@ class RiskModel:
                     algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
 
         self.df_historical['cluster'] = db.labels_
-        self.hotspots = []
+        all_hotspots = []
 
         # Estrazione delle proprietà di ciascun Hotspot identificato (cluster != -1)
         for cluster_id in set(db.labels_):
             if cluster_id != -1:
                 cluster_data = self.df_historical.loc[self.df_historical['cluster'] == cluster_id].copy()
-                self.hotspots.append({
+
+                #lista di coordinate [lat, lon] dei membri del cluster
+                member_points = [
+                    {'lat': float(row['lat']), 'lon': float(row['lon'])}
+                    for _, row in cluster_data.iterrows()
+                ]
+
+                all_hotspots.append({
                     'id': int(cluster_id),
                     'center_lat': float(cluster_data['lat'].mean()),
                     'center_lng': float(cluster_data['lon'].mean()),
-                    'size': int(len(cluster_data)) # Densità (punti nel cluster)
+                    'size': int(len(cluster_data)), # Densità (punti nel cluster)
+                    'points': member_points
                 })
-        print(f"RISK MODEL: Identificati {len(self.hotspots)} Hotspot.")
+
+        # ORDINAMENTO E TAGLIO: Teniamo solo i 30 cluster più densi
+        self.hotspots = sorted(all_hotspots, key=lambda x: x['size'], reverse=True)[:30]
+
+        print(f"RISK MODEL: Identificati {len(all_hotspots)} cluster totali. Salvataggio dei 30 più densi.")
 
     def _save_hotspots_to_database(self):
         """Chiama il Repository per delegare la scrittura degli hotspot."""
