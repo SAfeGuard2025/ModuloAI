@@ -142,43 +142,48 @@ class FirestoreRepository:
 
     # Metodo per salvare le segnalazioni analizzate utile per l apprendimento dell ai
     def save_analyzed_reports(self, analyzed_reports: List[Dict]):
-        """Salva i report analizzati in una collezione dedicata ('analyzed_reports')."""
-        if not self.db_client or not analyzed_reports:
-            print("FIREBASE REPO: Salvataggio report analizzati saltato.")
+        """
+        Salva o aggiorna i report analizzati nella collezione Firestore.
+        Se il report esiste già (stesso ID), i campi vengono sovrascritti.
+        """
+        if not self.db_client:
+            logging.error("FIREBASE REPO: Client non inizializzato.")
             return
 
-        print(f"FIREBASE REPO: Avvio salvataggio di {len(analyzed_reports)} report analizzati...")
+        print(f"FIREBASE REPO: Preparazione batch per {len(analyzed_reports)} report...")
 
         batch = self.db_client.batch()
         collection_ref = self.db_client.collection(REPORTS_COLLECTION)
 
         for report in analyzed_reports:
-            # Usa l'ID del report come ID del documento Firestore
             report_id = report.get('id')
             if not report_id:
-                logging.error(f"FIREBASE REPO: Report scartato per ID mancante/nullo: {report}")
+                logging.error(f"FIREBASE REPO: Report scartato per ID mancante: {report}")
                 continue
 
             doc_ref = collection_ref.document(str(report_id))
 
-            # Prepara i dati da salvare (Report originale + Risultati AI)
+            # Logica di preservazione della data
+            # Usa il timestamp già presente nel dizionario se disponibile
+            existing_ts = report.get('timestamp')
+
             data_to_save = {
                 'id': report.get('id'),
                 'lat': report.get('lat'),
-                'lng': report.get('lon'),
+                'lng': report.get('lon') or report.get('lng'),
                 'event_type': report.get('event_type'),
                 'severity': report.get('severity'),
-                # Risultati dell'analisi AI
                 'risk_level': report.get('risk_level'),
                 'risk_score': report.get('risk_score'),
                 'hotspot_match': report.get('hotspot_match'),
-                'timestamp': datetime.utcnow(),
+                # Se existing_ts esiste è mantenuto, altrimenti aggiornato ad ora
+                'timestamp': existing_ts if existing_ts else datetime.utcnow(),
                 'ai_processed_at': datetime.utcnow().isoformat()
             }
-            batch.set(doc_ref, data_to_save)
+            batch.set(doc_ref, data_to_save, merge=True)
 
         try:
             batch.commit()
-            print(f"FIREBASE REPO: Salvataggio di {len(analyzed_reports)} report completato con successo.")
+            print(f"FIREBASE REPO: Salvataggio/Aggiornamento di {len(analyzed_reports)} report completato.")
         except Exception as e:
-            logging.error(f"FIREBASE REPO: Errore nel commit dei report: {e}")
+            logging.error(f"FIREBASE REPO: Errore durante il commit del batch: {e}")
