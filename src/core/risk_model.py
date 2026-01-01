@@ -25,7 +25,7 @@ class RiskModel:
     Gestisce la logica del dominio (AI): caricamento dati, clustering DBSCAN,
     analisi del rischio in tempo reale e aggiornamento dei dati.
     """
-    def __init__(self,radius=HOTSPOT_RADIUS_KM, min_pts=MIN_DENSITY_POINTS):
+    def __init__(self,radius=None, min_pts=None):
         # Inizializza il repository per le operazioni di persistenza
         self.repository = FirestoreRepository()
 
@@ -158,7 +158,7 @@ class RiskModel:
 
         max_size = max([h['size'] for h in self.hotspots]) if self.hotspots else 1
 
-        BUFFER_DIST_KM = 0.5
+        buffer_dist_km = 0.3
 
         best_risk_score = 0.0
         is_in_hotspot = False
@@ -182,7 +182,7 @@ class RiskModel:
             # Il report è considerato nel cluster se:
             # - È dentro il poligono
             # - OPPURE la sua distanza dal centro è inferiore al raggio impostato + il buffer
-            if in_polygon or dist_km <= (self.radius + BUFFER_DIST_KM):
+            if in_polygon or dist_km <= (self.radius + buffer_dist_km):
                 is_in_hotspot = True
 
                 # --- CALCOLO SCORE (Logica originale preservata) ---
