@@ -25,7 +25,7 @@ class RiskModel:
     Gestisce la logica del dominio (AI): caricamento dati, clustering DBSCAN,
     analisi del rischio in tempo reale e aggiornamento dei dati.
     """
-    def __init__(self):
+    def __init__(self,radius=HOTSPOT_RADIUS_KM, min_pts=MIN_DENSITY_POINTS):
         # Inizializza il repository per le operazioni di persistenza
         self.repository = FirestoreRepository()
 
@@ -35,6 +35,9 @@ class RiskModel:
 
         # Fasi di Inizializzazione del Modello:
         self._load_historical_data()
+
+        self.radius = radius if radius is not None else HOTSPOT_RADIUS_KM
+        self.min_pts = min_pts if min_pts is not None else MIN_DENSITY_POINTS
 
         if not self.df_historical.empty:
             self._run_dbscan_clustering()  # Esegue l'apprendimento non supervisionato
@@ -145,8 +148,17 @@ class RiskModel:
         Logica di calcolo migliorata: verifica l'appartenenza tramite poligono
         (Convex Hull) dei punti del cluster per gestire forme irregolari.
         """
-        report_coords = [report['lat'], report.get('lon') or report.get('lng')]
+        lat = report.get('lat')
+        lon = report.get('lon') or report.get('lng') or report.get('longitude')
+
+        if lat is None or lon is None:
+            return report
+
+        report_coords = (float(lat), float(lon))
+
         max_size = max([h['size'] for h in self.hotspots]) if self.hotspots else 1
+
+        BUFFER_DIST_KM = 0.5
 
         best_risk_score = 0.0
         is_in_hotspot = False
@@ -167,15 +179,17 @@ class RiskModel:
             hotspot_center = (hotspot['center_lat'], hotspot['center_lng'])
             dist_km = great_circle(tuple(report_coords), hotspot_center).kilometers
 
-            # Il report è nel cluster se è dentro il poligono O molto vicino al centro
-            if in_polygon or dist_km <= (HOTSPOT_RADIUS_KM * 0.4):
+            # Il report è considerato nel cluster se:
+            # - È dentro il poligono
+            # - OPPURE la sua distanza dal centro è inferiore al raggio impostato + il buffer
+            if in_polygon or dist_km <= (self.radius + BUFFER_DIST_KM):
                 is_in_hotspot = True
 
                 # --- CALCOLO SCORE (Logica originale preservata) ---
                 severity_score = hotspot['size'] / max_size
                 cluster_data = self.df_historical.loc[self.df_historical['cluster'] == hotspot['id']]
-                most_recent_event = cluster_data['DataOra_DT'].max() if not cluster_data.empty else pd.Timestamp.now(tz='UTC')
 
+                most_recent_event = cluster_data['DataOra_DT'].max() if not cluster_data.empty else pd.Timestamp.now(tz='UTC')
                 if most_recent_event.tzinfo is None:
                     most_recent_event = most_recent_event.tz_localize('UTC')
 
@@ -191,8 +205,8 @@ class RiskModel:
 
         # 3. Punteggio Base (No Hotspot)
         if not is_in_hotspot:
-            MAX_SEVERITY = 5
-            best_risk_score = (report.get('severity', 3) / MAX_SEVERITY) * 0.20
+            max_severity = 5
+            best_risk_score = (report.get('severity', 3) / max_severity) * 0.20
 
         report['risk_level'] = 'HIGH' if best_risk_score >= 0.5 else 'LOW'
         report['risk_score'] = round(best_risk_score * 100, 2)

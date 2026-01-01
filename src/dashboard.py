@@ -13,6 +13,16 @@ import time
 # Importazione del modello per il ricalcolo in tempo reale
 from core.risk_model import RiskModel
 
+# Coordinate approssimative Bounding Box Campania
+CAMPANIA_BOX = {
+    "min_lat": 39.90, "max_lat": 41.55,
+    "min_lon": 13.85, "max_lon": 15.80
+}
+
+def is_in_campania(lat, lon):
+    return (CAMPANIA_BOX["min_lat"] <= lat <= CAMPANIA_BOX["max_lat"] and
+            CAMPANIA_BOX["min_lon"] <= lon <= CAMPANIA_BOX["max_lon"])
+
 # Configurazione Pagina
 st.set_page_config(page_title="Emergency AI - Analisi Territoriale", layout="wide")
 
@@ -90,14 +100,21 @@ def get_cluster_color(size):
 
 def pulisci_e_ricalcola(raggio, min_pts):
     db = get_db()
-    for doc in db.collection("risk_areas").stream(): doc.reference.delete()
+
+    for doc in db.collection("risk_areas").stream():
+        doc.reference.delete()
+
     import core.risk_model as rm
     rm.HOTSPOT_RADIUS_KM = raggio
     rm.MIN_DENSITY_POINTS = min_pts
-    model = RiskModel()
+
+    model = RiskModel(radius=raggio, min_pts=min_pts)
+
     _, df_reports = load_all_data()
     if not df_reports.empty:
-        model.update_existing_reports_risk(df_reports.to_dict('records'))
+        reports_to_fix = df_reports.to_dict('records')
+        model.update_existing_reports_risk(reports_to_fix)
+
     return len(model.hotspots)
 
 def elimina_tutti_report():
@@ -157,27 +174,57 @@ try:
         m = folium.Map(location=[40.85, 14.27], zoom_start=10, tiles="cartodbpositron")
 
         if show_clusters and not df_hotspots.empty:
+            # Ordina per dimensione e prendiamo i top K se richiesto
             df_show = df_hotspots.sort_values(by='size', ascending=False)
-            if val_top_k > 0: df_show = df_show.head(val_top_k)
+            if val_top_k > 0:
+                df_show = df_show.head(val_top_k)
+
             for _, h in df_show.iterrows():
                 pts = h.get('points')
-                if pts and len(pts) >= 3:
-                    try:
-                        arr = np.array([[p['lat'], p['lon']] for p in pts])
-                        hull = ConvexHull(arr)
-                        folium.Polygon(locations=arr[hull.vertices].tolist(), color=get_cluster_color(h['size']), fill=True, fill_opacity=0.4).add_to(m)
-                    except: continue
 
-        if show_reports and not df_reports.empty:
-            for _, r in df_reports.iterrows():
-                if 'lat' in r and 'lon' in r and pd.notnull(r['lat']):
-                    folium.CircleMarker(
-                        location=[r['lat'], r['lon']],
-                        radius=5,
-                        color="#E63946" if r.get('risk_level') == 'HIGH' else "#457B9D",
-                        fill=True,
-                        popup=f"Rischio: {r.get('risk_score', 0)}%"
-                    ).add_to(m)
+                # Controllo robusto: pts deve essere una lista con almeno 3 punti per fare un poligono
+                if isinstance(pts, list) and len(pts) >= 3:
+                    try:
+                        # Estrae le coordinate
+                        arr = np.array([[p['lat'], p['lon']] for p in pts])
+                        # Calcola il guscio convesso (area chiusa)
+                        hull = ConvexHull(arr)
+
+                        folium.Polygon(
+                            locations=arr[hull.vertices].tolist(),
+                            color=get_cluster_color(h['size']),
+                            fill=True,
+                            fill_opacity=0.4,
+                            popup=f"Area Rischio - Intensità: {h['size']}"
+                        ).add_to(m)
+                    except Exception as e:
+                        continue # Salta se i punti sono allineati o errati
+
+        for _, r in df_reports.iterrows():
+            if 'lat' in r and 'lon' in r and pd.notnull(r['lat']):
+                # Controllo Zona
+                in_zone = is_in_campania(r['lat'], r['lon'])
+
+                # Logica Colore/Icona
+                if not in_zone:
+                    color = "gray"
+                    tooltip_text = "⚠️ FUORI ZONA"
+                elif r.get('risk_level') == 'HIGH':
+                    color = "#E63946" # Rosso
+                    tooltip_text = f"Rischio Alto: {r.get('risk_score', 0)}%"
+                else:
+                    color = "#457B9D" # Blu
+                    tooltip_text = f"Rischio: {r.get('risk_score', 0)}%"
+
+                folium.CircleMarker(
+                    location=[r['lat'], r['lon']],
+                    radius=6 if not in_zone else 5, # Leggermente più grande se fuori zona
+                    color=color,
+                    fill=True,
+                    fill_opacity=0.7,
+                    popup=tooltip_text,
+                    tooltip=tooltip_text
+                ).add_to(m)
 
             #Pin dell'ultimo click dell'utente
             if st.session_state.last_map_click:
@@ -197,10 +244,32 @@ try:
                 map_output["last_clicked"]["lng"]
             )
 
+        # --- TABELLE DATI SOTTO LA MAPPA ---
         if not df_reports.empty:
-            st.markdown("### 📋 Ultime Segnalazioni")
-            cols = [c for c in ['event_type', 'risk_level', 'risk_score', 'tempo_trascorso'] if c in df_reports.columns]
-            st.dataframe(df_reports[cols].sort_values(by='risk_score', ascending=False), use_container_width=True)
+            # Creiamo una colonna booleana per il filtraggio
+            df_reports['in_campania'] = df_reports.apply(lambda x: is_in_campania(x['lat'], x['lon']), axis=1)
+
+            # Colonne da visualizzare (usiamo rename_map per evitare warning di scope)
+            view_cols = [c for c in ['event_type', 'risk_level', 'risk_score', 'tempo_trascorso'] if c in df_reports.columns]
+
+            # Sezione 1: Report in Campania
+            df_internal = df_reports[df_reports['in_campania']].sort_values(by='risk_score', ascending=False)
+            st.markdown("### 📋 Segnalazioni in Campania")
+            if not df_internal.empty:
+                st.dataframe(df_internal[view_cols], use_container_width=True)
+            else:
+                st.info("Nessuna segnalazione rilevata nella regione.")
+
+            st.markdown("---") # Divisore visivo
+
+            # Sezione 2: Report Fuori Zona
+            df_external = df_reports[~df_reports['in_campania']].sort_values(by='dt_obj', ascending=False)
+            st.markdown("### 🌐 Segnalazioni Fuori Regione")
+            if not df_external.empty:
+                # Applichiamo uno stile grigio per differenziare visivamente la tabella
+                st.dataframe(df_external[view_cols], use_container_width=True)
+            else:
+                st.write("Nessuna segnalazione esterna.")
 
     # --- TAB 2: INVIO ---
     else:
@@ -209,6 +278,9 @@ try:
         last_coords = st.session_state.last_map_click
         def_lat = float(last_coords[0])
         def_lon = float(last_coords[1])
+
+        if not is_in_campania(def_lat, def_lon):
+            st.warning("⚠️ Attenzione: Le coordinate selezionate sembrano essere fuori dalla regione Campania.")
 
         with st.form("new_rep"):
             ca, cb = st.columns(2)
@@ -229,7 +301,7 @@ try:
 
                 with st.spinner("Analisi AI..."):
                     try:
-                        model = RiskModel()
+                        model = RiskModel(radius=val_radius, min_pts=val_min_pts)
                         res = model.calculate_risk_and_update([payload])
 
                         if isinstance(res, dict) and 'analyzed_reports' in res:
