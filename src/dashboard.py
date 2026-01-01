@@ -190,12 +190,18 @@ try:
                         # Calcola il guscio convesso (area chiusa)
                         hull = ConvexHull(arr)
 
+                        hover_text = f"""
+                            <b>Dettagli Area Rischio</b><br>
+                            Intensità: {h['size']}<br>
+                        """
+
                         folium.Polygon(
                             locations=arr[hull.vertices].tolist(),
                             color=get_cluster_color(h['size']),
                             fill=True,
                             fill_opacity=0.4,
-                            popup=f"Area Rischio - Intensità: {h['size']}"
+                            tooltip=folium.Tooltip(hover_text, sticky=True),
+                            extra_style="pointer-events: visibleStroke; cursor: crosshair;"
                         ).add_to(m)
                     except Exception as e:
                         continue # Salta se i punti sono allineati o errati
