@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import numpy as np
 from sklearn.cluster import DBSCAN
+from sklearn.metrics import silhouette_score
 from geopy.distance import great_circle
 from matplotlib.path import Path
 import logging
@@ -13,7 +14,7 @@ from core.firestore_repository import FirestoreRepository
 # Configurazione del Modello (Logica AI)
 HOTSPOT_RADIUS_KM = 2.2         # Raggio del cluster per DBSCAN
 MIN_DENSITY_POINTS = 8          # Numero minimo di punti per formare un cluster (Hotspot)
-FILE_NAME = '911_campania_geolocated_randomized.csv'
+FILE_NAME = '911_campania_random_types.csv'
 
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), FILE_NAME)
 WEIGHT_CLUSTER_SIZE = 0.6     # Peso della densità del cluster nel calcolo del rischio
@@ -298,3 +299,55 @@ class RiskModel:
 
         self.repository.save_analyzed_reports(updated_reports)
         print(f"MODEL: Aggiornamento completato con successo.")
+
+    def get_clustering_metrics(self) -> Dict:
+        """
+        Calcola i parametri di bontà del clustering (Silhouette e Coesione).
+        """
+        # Verifica se abbiamo dati e se il clustering è stato eseguito
+        if self.df_historical.empty or 'cluster' not in self.df_historical.columns or not self.hotspots:
+            return {"silhouette": 0, "cohesion": 0, "n_clusters": 0}
+
+        # 1. Recupera etichette e coordinate direttamente dai dati storici
+        # Filtra il rumore (label -1) per il calcolo della Silhouette
+        valid_data = self.df_historical[self.df_historical['cluster'] != -1]
+
+        silhouette = 0.0
+        n_clusters = len(self.hotspots)
+
+        # Silhouette richiede almeno 2 cluster distinti e dati validi
+        if n_clusters > 1 and len(valid_data) > n_clusters:
+            coords = valid_data[['lat', 'lon']].values
+            labels = valid_data['cluster'].values
+
+            # Calcolo su dati in radianti per coerenza con metrica haversine
+            try:
+                silhouette = silhouette_score(np.radians(coords), labels, metric='haversine')
+            except Exception as e:
+                logging.warning(f"Errore calcolo Silhouette: {e}")
+                silhouette = 0.0
+
+        # 2. Coesione: Distanza media dal centroide
+        total_cohesion = 0
+        count = 0
+
+        for hotspot in self.hotspots:
+            pts = hotspot.get('points', [])
+            if not pts: continue
+
+            center = (hotspot['center_lat'], hotspot['center_lng'])
+            # Calcola la distanza di ogni punto dal centro del suo cluster
+            distances = [great_circle((p['lat'], p['lon']), center).meters for p in pts]
+
+            if distances:
+                avg_dist = np.mean(distances)
+                total_cohesion += avg_dist
+                count += 1
+
+        avg_cohesion_meters = round(total_cohesion / count, 2) if count > 0 else 0
+
+        return {
+            "silhouette": round(silhouette, 3),   #(-1 a 1)
+            "cohesion_avg_m": avg_cohesion_meters, #(minore = più compatto)
+            "n_clusters": n_clusters
+        }

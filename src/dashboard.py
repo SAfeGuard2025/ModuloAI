@@ -114,6 +114,7 @@ def pulisci_e_ricalcola(raggio, min_pts):
     if not df_reports.empty:
         reports_to_fix = df_reports.to_dict('records')
         model.update_existing_reports_risk(reports_to_fix)
+        st.session_state.model_metrics = model.get_clustering_metrics()
 
     return len(model.hotspots)
 
@@ -168,6 +169,47 @@ try:
         st.toast(f"Rimossi {c} report.")
         trigger_refresh()
         time.sleep(1); st.rerun()
+
+    # Calcolo metriche su richiesta o recupero da session_state
+    if 'model_metrics' not in st.session_state:
+        with st.spinner("Caricamento metriche..."):
+            initial_model = RiskModel(radius=val_radius, min_pts=val_min_pts)
+            st.session_state.model_metrics = initial_model.get_clustering_metrics()
+
+    metrics = st.session_state.model_metrics
+
+    # --- SIDEBAR: QUALITÀ CLUSTERING ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📊 Qualità Clustering (AI)")
+
+    # Recupero metriche dal session state (aggiornato dal tasto ricalcola)
+    if 'model_metrics' not in st.session_state:
+        st.session_state.model_metrics = {"silhouette": 0, "cohesion_avg_m": 0, "n_clusters": 0}
+
+    m = st.session_state.model_metrics
+    sil_val = m.get('silhouette', 0)
+    coh_val = m.get('cohesion_avg_m', 0)
+
+    col_m1, col_m2 = st.sidebar.columns(2)
+
+    with col_m1:
+        # Silhouette: più alta è meglio (>0.5 ottimo)
+        st.metric(
+            label="Silhouette",
+            value=f"{sil_val:.2f}",
+            delta="Ottimo" if sil_val > 0.5 else "Basso",
+            help="Indice di separazione. Range -1 a 1."
+        )
+
+    with col_m2:
+        # Coesione: più bassa è meglio (arrotondata a 0 decimali)
+        st.metric(
+            label="Coesione",
+            value=f"{coh_val:.0f} m",
+            delta="Compatto" if coh_val < 1000 else "Disperso",
+            delta_color="inverse", # Verde se il valore è basso
+            help="Distanza media dal centro."
+        )
 
     # --- TAB 1: MAPPA ---
     if menu == "Mappa & Analisi":
