@@ -98,24 +98,25 @@ def get_cluster_color(size):
     if size <= 25: return "#FF8C00"
     return "#8B0000"
 
-def pulisci_e_ricalcola(raggio, min_pts):
+def pulisci_e_ricalcola(algo, raggio, min_pts, k):
     db = get_db()
-
     for doc in db.collection("risk_areas").stream():
         doc.reference.delete()
 
-    import core.risk_model as rm
-    rm.HOTSPOT_RADIUS_KM = raggio
-    rm.MIN_DENSITY_POINTS = min_pts
-
-    model = RiskModel(radius=raggio, min_pts=min_pts)
+    # Passa tutti i parametri al modello
+    model = RiskModel(
+        radius=raggio,
+        min_pts=min_pts,
+        algorithm=algo,
+        n_clusters_k=k
+    )
 
     _, df_reports = load_all_data()
     if not df_reports.empty:
         reports_to_fix = df_reports.to_dict('records')
         model.update_existing_reports_risk(reports_to_fix)
-        st.session_state.model_metrics = model.get_clustering_metrics()
 
+    st.session_state.model_metrics = model.get_clustering_metrics()
     return len(model.hotspots)
 
 def elimina_tutti_report():
@@ -146,10 +147,45 @@ if st.session_state.last_menu != menu:
 try:
     df_hotspots, df_reports = load_all_data()
 
-    # --- SIDEBAR (Features mantenute) ---
+    # --- SIDEBAR ---
+
+    # Sincronizzazione parametri sidebar
+    if 'radius' not in st.session_state:
+        st.session_state.radius = 2.2
+    if 'min_pts' not in st.session_state:
+        st.session_state.min_pts = 8
+    if 'algorithm_type' not in st.session_state:
+        st.session_state['algorithm_type'] = "DBSCAN (Density)"
+    if 'n_clusters_k' not in st.session_state:
+        st.session_state['n_clusters_k'] = 5
+
     st.sidebar.header("⚙️ Parametri AI")
-    val_radius = st.sidebar.slider("Raggio Cluster (KM)", 0.5, 5.0, 2.2, 0.1)
-    val_min_pts = st.sidebar.slider("Densità Minima", 3, 50, 8)
+
+    # SELETTORE PIPELINE
+    pipeline_type = st.sidebar.radio(
+        "Scegli Algoritmo:",
+        ("DBSCAN (Density)", "K-Means (Centroid)"),
+        key='algorithm_type',
+        help="DBSCAN rileva forme arbitrarie e rumore. K-Means forza partizioni sferiche."
+    )
+
+    def on_change():
+        print(f"DEBUG: Widget Cambiato! Nuovo Stato: Raggio={st.session_state.radius}, Punti={st.session_state.min_pts}")
+
+    # Parametri dinamici in base alla scelta
+    if pipeline_type == "DBSCAN (Density)":
+        val_algo = 'dbscan'
+        st.sidebar.slider("Raggio (km)", 0.5, 5.0,key='radius', on_change=on_change)
+        st.sidebar.slider("Min. Punti", 3, 20,key='min_pts', on_change=on_change)
+
+        val_radius = st.session_state.radius
+        val_min_pts = st.session_state.min_pts
+        val_k = 5 # PlaceHolder
+    else:
+        val_algo = 'kmeans'
+        val_k = st.sidebar.slider("Numero Cluster (K)", 2, 20, 5, 1, key='n_clusters_k',help="Numero di centroidi da generare.")
+        val_radius = 2.2 # Placeholder
+        val_min_pts = 8  # Placeholder
 
     st.sidebar.markdown("---")
     st.sidebar.header("🗺️ Visualizzazione")
@@ -158,11 +194,11 @@ try:
     val_top_k = st.sidebar.number_input("Top Hotspot", 0, 100, 10)
 
     if st.sidebar.button("🔄 Ricalcola Hotspots"):
-        with st.spinner("Analisi..."):
-            n = pulisci_e_ricalcola(val_radius, val_min_pts)
-            st.toast(f"Trovate {n} aree.")
-            trigger_refresh()
-            time.sleep(1); st.rerun()
+        print(f"DEBUG: Render Pagina - Valori correnti: R={val_radius}, P={val_min_pts}")
+        with st.spinner(f"Addestramento {val_algo.upper()} in corso..."):
+            n = pulisci_e_ricalcola(val_algo, st.session_state.radius, st.session_state.min_pts, val_k)
+            st.success(f"Pipeline completata! Generati {n} cluster.")
+            st.rerun() # Ricarica per vedere le nuove metriche
 
     if st.sidebar.button("🗑️ ELIMINA TUTTI I REPORT", type="primary"):
         c = elimina_tutti_report()
@@ -173,7 +209,7 @@ try:
     # Calcolo metriche su richiesta o recupero da session_state
     if 'model_metrics' not in st.session_state:
         with st.spinner("Caricamento metriche..."):
-            initial_model = RiskModel(radius=val_radius, min_pts=val_min_pts)
+            initial_model = RiskModel(radius=st.session_state.radius,min_pts=st.session_state.min_pts)
             st.session_state.model_metrics = initial_model.get_clustering_metrics()
 
     metrics = st.session_state.model_metrics
@@ -183,33 +219,40 @@ try:
     st.sidebar.subheader("📊 Qualità Clustering (AI)")
 
     # Recupero metriche dal session state (aggiornato dal tasto ricalcola)
-    if 'model_metrics' not in st.session_state:
-        st.session_state.model_metrics = {"silhouette": 0, "cohesion_avg_m": 0, "n_clusters": 0}
+    if 'model_metrics' in st.session_state:
+        m = st.session_state.model_metrics
 
-    m = st.session_state.model_metrics
-    sil_val = m.get('silhouette', 0)
-    coh_val = m.get('cohesion_avg_m', 0)
+        silh = m.get("silhouette", 0)
+        coes = m.get("cohesion_avg_m", 0)
+        n_clus = m.get("n_clusters", 0)
+        exec_time = m.get("execution_time", 0)
 
-    col_m1, col_m2 = st.sidebar.columns(2)
+        # 1. Numero di Cluster
+        st.sidebar.metric("Cluster Individuati", n_clus)
 
-    with col_m1:
-        # Silhouette: più alta è meglio (>0.5 ottimo)
-        st.metric(
-            label="Silhouette",
-            value=f"{sil_val:.2f}",
-            delta="Ottimo" if sil_val > 0.5 else "Basso",
-            help="Indice di separazione. Range -1 a 1."
-        )
+        # 2. Silhouette Score (Separazione)
+        if silh > 0.5:
+            silh_feedback = f":green[Ottima separazione dei cluster]"
+        elif silh > 0.2:
+            silh_feedback = f":orange[Separazione accettabile]"
+        else:
+            silh_feedback = f":red[Cluster molto sovrapposti]"
 
-    with col_m2:
-        # Coesione: più bassa è meglio (arrotondata a 0 decimali)
-        st.metric(
-            label="Coesione",
-            value=f"{coh_val:.0f} m",
-            delta="Compatto" if coh_val < 1000 else "Disperso",
-            delta_color="inverse", # Verde se il valore è basso
-            help="Distanza media dal centro."
-        )
+        st.sidebar.metric("Silhouette Score", f"{silh:.3f}")
+        st.sidebar.markdown(silh_feedback) # Testo colorato sotto la metrica
+
+        # 3. Coesione (Densità interna)
+        if coes < 500:
+            coes_feedback = f":green[Alta precisione (molto denso)]"
+        elif coes < 1500:
+            coes_feedback = f":orange[Densità media]"
+        else:
+            coes_feedback = f":red[Cluster molto dispersi]"
+
+        st.sidebar.metric("Coesione Media", f"{coes}m")
+        st.sidebar.markdown(coes_feedback)
+
+        st.sidebar.metric("Tempo Esecuzione", f"{exec_time} ms")
 
     # --- TAB 1: MAPPA ---
     if menu == "Mappa & Analisi":
@@ -347,10 +390,19 @@ try:
                     "timestamp": datetime.utcnow()
                 }
 
+                print(f"DEBUG: Invio Segnalazione! Parametri nel modello: R={st.session_state.radius}, P={st.session_state.min_pts}")
                 with st.spinner("Analisi AI..."):
+                    algo_tecnico = 'kmeans' if st.session_state.algorithm_type == "K-Means (Centroid)" else 'dbscan'
                     try:
-                        model = RiskModel(radius=val_radius, min_pts=val_min_pts)
+                        model = RiskModel(
+                            radius=st.session_state.radius,
+                            min_pts=st.session_state.min_pts,
+                            algorithm=algo_tecnico,
+                            n_clusters_k=st.session_state.n_clusters_k
+                        )
                         res = model.calculate_risk_and_update([payload])
+
+                        st.session_state.model_metrics = model.get_clustering_metrics()
 
                         if isinstance(res, dict) and 'analyzed_reports' in res:
                             score = res['analyzed_reports'][0].get('risk_score', 0)

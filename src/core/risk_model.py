@@ -3,9 +3,11 @@ import pandas as pd
 import os
 import numpy as np
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from geopy.distance import great_circle
 from matplotlib.path import Path
+import time
 import logging
 
 # Importazione del Repository per l'I/O con il database
@@ -20,13 +22,17 @@ DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), FILE_NAME)
 WEIGHT_CLUSTER_SIZE = 0.6     # Peso della densità del cluster nel calcolo del rischio
 WEIGHT_RECENCY_SCORE = 0.4    # Peso dell'attualità del cluster nel calcolo del rischio
 
+CAMPANIA_BOX = {
+    "min_lat": 39.90, "max_lat": 41.55,
+    "min_lon": 13.85, "max_lon": 15.80
+}
 
 class RiskModel:
     """
     Gestisce la logica del dominio (AI): caricamento dati, clustering DBSCAN,
     analisi del rischio in tempo reale e aggiornamento dei dati.
     """
-    def __init__(self,radius=None, min_pts=None):
+    def __init__(self,radius=None, min_pts=None,algorithm='dbscan', n_clusters_k=5):
         # Inizializza il repository per le operazioni di persistenza
         self.repository = FirestoreRepository()
 
@@ -37,12 +43,24 @@ class RiskModel:
         # Fasi di Inizializzazione del Modello:
         self._load_historical_data()
 
-        self.radius = radius if radius is not None else HOTSPOT_RADIUS_KM
-        self.min_pts = min_pts if min_pts is not None else MIN_DENSITY_POINTS
+        self.radius = float(radius) if radius is not None else HOTSPOT_RADIUS_KM
+        self.min_pts = int(min_pts) if min_pts is not None else MIN_DENSITY_POINTS
+
+        self.algorithm = algorithm.lower()  # 'dbscan' o 'kmeans'
+        self.n_clusters_k = n_clusters_k # Solo per K-Means
+
+        start_time = time.time()
 
         if not self.df_historical.empty:
-            self._run_dbscan_clustering()  # Esegue l'apprendimento non supervisionato
-            self._save_hotspots_to_database() # Persiste i risultati tramite il Repository
+
+            if self.algorithm == 'kmeans':
+                self._run_kmeans_clustering()
+            else:
+                self._run_dbscan_clustering()
+
+            self._save_hotspots_to_database()
+
+        self.execution_time = round((time.time() - start_time) * 1000, 2)
 
     def _load_historical_data(self):
         """
@@ -96,6 +114,21 @@ class RiskModel:
 
             self.n_historical_rows = len(self.df_historical)
 
+            if not self.df_historical.empty:
+                initial_count = len(self.df_historical)
+
+                # FILTRO GEOGRAFICO: Mantieni solo i punti dentro la Campania
+                self.df_historical = self.df_historical[
+                    (self.df_historical['lat'] >= CAMPANIA_BOX["min_lat"]) &
+                    (self.df_historical['lat'] <= CAMPANIA_BOX["max_lat"]) &
+                    (self.df_historical['lon'] >= CAMPANIA_BOX["min_lon"]) &
+                    (self.df_historical['lon'] <= CAMPANIA_BOX["max_lon"])
+                    ]
+
+                removed = initial_count - len(self.df_historical)
+                if removed > 0:
+                    print(f"MODEL: Rimossi {removed} punti fuori dai confini della Campania.")
+
         except FileNotFoundError:
             logging.error(f"MODEL: File CSV storico non trovato in {DATA_FILE_PATH}")
             self.df_historical = pd.DataFrame()
@@ -110,7 +143,7 @@ class RiskModel:
         coords = self.df_historical[['lat', 'lon']].values
         kms_per_radian = 6371.0088
         # Conversione del raggio (KM) in radianti per la metrica Haversine
-        epsilon = HOTSPOT_RADIUS_KM / kms_per_radian
+        epsilon = self.radius / kms_per_radian
 
         db = DBSCAN(eps=epsilon, min_samples=MIN_DENSITY_POINTS,
                     algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
@@ -349,5 +382,44 @@ class RiskModel:
         return {
             "silhouette": round(silhouette, 3),   #(-1 a 1)
             "cohesion_avg_m": avg_cohesion_meters, #(minore = più compatto)
-            "n_clusters": n_clusters
+            "n_clusters": n_clusters,
+            "execution_time": self.execution_time
         }
+
+    def _run_kmeans_clustering(self):
+        """
+        PIPELINE B: K-Means (Centroid-based).
+        """
+        if self.df_historical.empty: return
+
+        print(f"MODEL: Esecuzione Pipeline K-MEANS con K={self.n_clusters_k}...")
+
+        # Sicurezza: K non può essere maggiore del numero di punti disponibili
+        k_effettivo = min(self.n_clusters_k, len(self.df_historical))
+
+        coords = self.df_historical[['lat', 'lon']].values
+
+        kmeans = KMeans(n_clusters=k_effettivo, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(coords)
+
+        self.df_historical['cluster'] = labels
+        all_hotspots = []
+
+        # Costruzione Hotspots
+        for cluster_id in range(self.n_clusters_k):
+            cluster_data = self.df_historical.loc[self.df_historical['cluster'] == cluster_id]
+            if cluster_data.empty: continue
+
+            member_points = [{'lat': float(r['lat']), 'lon': float(r['lon'])} for _, r in cluster_data.iterrows()]
+
+            centroid = kmeans.cluster_centers_[cluster_id]
+
+            all_hotspots.append({
+                'id': int(cluster_id),
+                'center_lat': float(centroid[0]),
+                'center_lng': float(centroid[1]),
+                'size': int(len(cluster_data)),
+                'points': member_points
+            })
+
+        self.hotspots = sorted(all_hotspots, key=lambda x: x['size'], reverse=True)
