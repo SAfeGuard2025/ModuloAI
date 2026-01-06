@@ -1,4 +1,4 @@
-# Safeguard-AI: Motore Predittivo di Rischio per la Gestione delle Emergenze 🧠🚨
+# SAfeGuard-AI: Motore Predittivo di Rischio per la Gestione delle Emergenze 🧠🚨
 
 Questa repository contiene **Safeguard-AI**, il componente di intelligenza artificiale core della piattaforma Safeguard. Il suo obiettivo è trasformare i dati grezzi delle segnalazioni di emergenza in informazioni di rischio *actionable* e geospaziali, supportando i decisori in tempo reale.
 
