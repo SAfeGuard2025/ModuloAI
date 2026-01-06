@@ -3,29 +3,36 @@ import pandas as pd
 import os
 import numpy as np
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 from geopy.distance import great_circle
-from datetime import datetime
+from matplotlib.path import Path
+import time
 import logging
 
 # Importazione del Repository per l'I/O con il database
 from core.firestore_repository import FirestoreRepository
 
 # Configurazione del Modello (Logica AI)
-HOTSPOT_RADIUS_KM = 2.7       # Raggio del cluster per DBSCAN
-MIN_DENSITY_POINTS = 3        # Numero minimo di punti per formare un cluster (Hotspot)
-FILE_NAME = '911_campania_geolocated.csv'
+HOTSPOT_RADIUS_KM = 2.2         # Raggio del cluster per DBSCAN
+MIN_DENSITY_POINTS = 8          # Numero minimo di punti per formare un cluster (Hotspot)
+FILE_NAME = '911_campania_random_types.csv'
 
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), FILE_NAME)
 WEIGHT_CLUSTER_SIZE = 0.6     # Peso della densità del cluster nel calcolo del rischio
 WEIGHT_RECENCY_SCORE = 0.4    # Peso dell'attualità del cluster nel calcolo del rischio
 
+CAMPANIA_BOX = {
+    "min_lat": 39.90, "max_lat": 41.55,
+    "min_lon": 13.85, "max_lon": 15.80
+}
 
 class RiskModel:
     """
     Gestisce la logica del dominio (AI): caricamento dati, clustering DBSCAN,
     analisi del rischio in tempo reale e aggiornamento dei dati.
     """
-    def __init__(self):
+    def __init__(self,radius=None, min_pts=None,algorithm='dbscan', n_clusters_k=5):
         # Inizializza il repository per le operazioni di persistenza
         self.repository = FirestoreRepository()
 
@@ -36,9 +43,24 @@ class RiskModel:
         # Fasi di Inizializzazione del Modello:
         self._load_historical_data()
 
+        self.radius = float(radius) if radius is not None else HOTSPOT_RADIUS_KM
+        self.min_pts = int(min_pts) if min_pts is not None else MIN_DENSITY_POINTS
+
+        self.algorithm = algorithm.lower()  # 'dbscan' o 'kmeans'
+        self.n_clusters_k = n_clusters_k # Solo per K-Means
+
+        start_time = time.time()
+
         if not self.df_historical.empty:
-            self._run_dbscan_clustering()  # Esegue l'apprendimento non supervisionato
-            self._save_hotspots_to_database() # Persiste i risultati tramite il Repository
+
+            if self.algorithm == 'kmeans':
+                self._run_kmeans_clustering()
+            else:
+                self._run_dbscan_clustering()
+
+            self._save_hotspots_to_database()
+
+        self.execution_time = round((time.time() - start_time) * 1000, 2)
 
     def _load_historical_data(self):
         """
@@ -76,14 +98,12 @@ class RiskModel:
                     df_db['DataOra'] = df_db['DataOra_DT'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
                 # Seleziona solo le colonne che sono essenziali per il clustering (lat, lon, DataOra_DT)
-                # Il resto dei dati arricchiti (risk_score) non serve al calcolo degli Hotspot
                 cols_to_merge = [
                     'lat', 'lon', 'DataOra_DT', 'DataOra',
-                    'event_type', 'severity', 'risk_score' # Manteniamo il risk_score a titolo informativo
+                    'event_type', 'severity'
                 ]
 
                 # 3. Concatenazione dei due dataset
-                # Usiamo ignore_index=True per unire i dataframe con indici diversi
                 self.df_historical = pd.concat([df_csv, df_db[cols_to_merge]], ignore_index=True)
 
                 print(f"MODEL: Dati uniti! Righe CSV: {len(df_csv)} + Righe DB: {len(df_db)} = Totale storico: {len(self.df_historical)}.")
@@ -93,6 +113,21 @@ class RiskModel:
                 print(f"MODEL: Caricamento solo da CSV. Totale righe: {len(self.df_historical)}.")
 
             self.n_historical_rows = len(self.df_historical)
+
+            if not self.df_historical.empty:
+                initial_count = len(self.df_historical)
+
+                # FILTRO GEOGRAFICO: Mantieni solo i punti dentro la Campania
+                self.df_historical = self.df_historical[
+                    (self.df_historical['lat'] >= CAMPANIA_BOX["min_lat"]) &
+                    (self.df_historical['lat'] <= CAMPANIA_BOX["max_lat"]) &
+                    (self.df_historical['lon'] >= CAMPANIA_BOX["min_lon"]) &
+                    (self.df_historical['lon'] <= CAMPANIA_BOX["max_lon"])
+                    ]
+
+                removed = initial_count - len(self.df_historical)
+                if removed > 0:
+                    print(f"MODEL: Rimossi {removed} punti fuori dai confini della Campania.")
 
         except FileNotFoundError:
             logging.error(f"MODEL: File CSV storico non trovato in {DATA_FILE_PATH}")
@@ -108,133 +143,283 @@ class RiskModel:
         coords = self.df_historical[['lat', 'lon']].values
         kms_per_radian = 6371.0088
         # Conversione del raggio (KM) in radianti per la metrica Haversine
-        epsilon = HOTSPOT_RADIUS_KM / kms_per_radian
+        epsilon = self.radius / kms_per_radian
 
         db = DBSCAN(eps=epsilon, min_samples=MIN_DENSITY_POINTS,
                     algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
 
         self.df_historical['cluster'] = db.labels_
-        self.hotspots = []
+        all_hotspots = []
 
         # Estrazione delle proprietà di ciascun Hotspot identificato (cluster != -1)
         for cluster_id in set(db.labels_):
             if cluster_id != -1:
                 cluster_data = self.df_historical.loc[self.df_historical['cluster'] == cluster_id].copy()
-                self.hotspots.append({
+
+                # lista di coordinate [lat, lon] dei membri del cluster
+                member_points = [
+                    {'lat': float(row['lat']), 'lon': float(row['lon'])}
+                    for _, row in cluster_data.iterrows()
+                ]
+
+                all_hotspots.append({
                     'id': int(cluster_id),
                     'center_lat': float(cluster_data['lat'].mean()),
                     'center_lng': float(cluster_data['lon'].mean()),
-                    'size': int(len(cluster_data)) # Densità (punti nel cluster)
+                    'size': int(len(cluster_data)), # Densità (punti nel cluster)
+                    'points': member_points
                 })
-        print(f"RISK MODEL: Identificati {len(self.hotspots)} Hotspot.")
+
+        self.hotspots = sorted(all_hotspots, key=lambda x: x['size'], reverse=True)
+        print(f"RISK MODEL: Identificati e pronti al salvataggio {len(self.hotspots)} cluster.")
 
     def _save_hotspots_to_database(self):
         """Chiama il Repository per delegare la scrittura degli hotspot."""
         self.repository.save_hotspots(self.hotspots, HOTSPOT_RADIUS_KM)
+
+    def _analyze_report_logic(self, report: Dict) -> Dict:
+        """
+        Logica di calcolo migliorata: verifica l'appartenenza tramite poligono
+        (Convex Hull) dei punti del cluster per gestire forme irregolari.
+        """
+        lat = report.get('lat')
+        lon = report.get('lon') or report.get('lng') or report.get('longitude')
+
+        if lat is None or lon is None:
+            return report
+
+        report_coords = (float(lat), float(lon))
+
+        max_size = max([h['size'] for h in self.hotspots]) if self.hotspots else 1
+
+        buffer_dist_km = 0.3
+
+        best_risk_score = 0.0
+        is_in_hotspot = False
+        matched_hotspot_id = -1
+
+        for hotspot in self.hotspots:
+            pts = hotspot.get('points', [])
+            in_polygon = False
+
+            # 1. Controllo Geometrico (Poligono)
+            if len(pts) >= 3:
+                poly_points = [[p['lat'], p['lon']] for p in pts]
+                path = Path(poly_points)
+                # Verifica se il punto è dentro il perimetro del cluster
+                in_polygon = path.contains_point(report_coords)
+
+            # 2. Controllo Prossimità (Raggio di fallback)
+            hotspot_center = (hotspot['center_lat'], hotspot['center_lng'])
+            dist_km = great_circle(tuple(report_coords), hotspot_center).kilometers
+
+            # Il report è considerato nel cluster se:
+            # - È dentro il poligono
+            # - OPPURE la sua distanza dal centro è inferiore al raggio impostato + il buffer
+            if in_polygon or dist_km <= (self.radius + buffer_dist_km):
+                is_in_hotspot = True
+
+                # --- CALCOLO SCORE (Logica originale preservata) ---
+                severity_score = hotspot['size'] / max_size
+                cluster_data = self.df_historical.loc[self.df_historical['cluster'] == hotspot['id']]
+
+                most_recent_event = cluster_data['DataOra_DT'].max() if not cluster_data.empty else pd.Timestamp.now(tz='UTC')
+                if most_recent_event.tzinfo is None:
+                    most_recent_event = most_recent_event.tz_localize('UTC')
+
+                time_difference = pd.Timestamp.now(tz='UTC') - most_recent_event
+                days_ago = time_difference.total_seconds() / (60 * 60 * 24)
+                recency_score = 1.0 / (1 + (max(0, days_ago) / 30))
+
+                current_score = (severity_score * WEIGHT_CLUSTER_SIZE) + (recency_score * WEIGHT_RECENCY_SCORE)
+
+                if current_score > best_risk_score:
+                    best_risk_score = current_score
+                    matched_hotspot_id = hotspot['id']
+
+        # 3. Punteggio Base (No Hotspot)
+        if not is_in_hotspot:
+            max_severity = 5
+            best_risk_score = (report.get('severity', 3) / max_severity) * 0.20
+
+        report['risk_level'] = 'HIGH' if best_risk_score >= 0.5 else 'LOW'
+        report['risk_score'] = round(best_risk_score * 100, 2)
+        report['hotspot_match'] = is_in_hotspot
+        report['matched_cluster_id'] = matched_hotspot_id
+
+        return report
 
     def calculate_risk_and_update(self, reports: List[Dict]) -> Dict:
         """
         Funzione di inferenza. Calcola il rischio per i nuovi report
         e li aggiunge allo storico in memoria.
         """
-        high_risk_reports = 0
+        high_risk_count = 0
         new_historical_rows = []
-        max_size = max([h['size'] for h in self.hotspots]) if self.hotspots else 1
-
         reports_successfully_analyzed = []
 
         for report in reports:
             report_unique_id = report.get('id')
-
             if not report_unique_id:
-                logging.error(f"MODEL: Report scartato. ID mancante/nullo, impossibile tracciare: {report}")
+                logging.error(f"MODEL: Report scartato. ID mancante: {report}")
                 continue
 
-            report_coords = (report['lat'], report['lon'])
-            best_risk_score = 0.0
-            is_in_hotspot = False
-            matched_hotspot_id = -1
-            report_unique_id = report.get('id')
+            # Applica logica centralizzata
+            report = self._analyze_report_logic(report)
 
-            # 1. Calcolo del Rischio (Itera sugli hotspot esistenti)
-            for hotspot in self.hotspots:
-                hotspot_coords = (hotspot['center_lat'], hotspot['center_lng'])
-                distance_km = great_circle(report_coords, hotspot_coords).kilometers
-
-                if distance_km <= HOTSPOT_RADIUS_KM:
-                    is_in_hotspot = True
-
-                    # Calcolo Severità Ponderata
-                    severity_score = hotspot['size'] / max_size
-
-                    # Calcolo Recency Ponderata (Decadimento basato sull'evento più recente)
-                    cluster_data = self.df_historical.loc[self.df_historical['cluster'] == hotspot['id']].copy()
-                    most_recent_event = cluster_data['DataOra_DT'].max() if not cluster_data.empty else pd.Timestamp.now(tz='UTC')
-
-                    time_difference = pd.Timestamp.now(tz='UTC') - most_recent_event
-                    days_ago = time_difference.total_seconds() / (60 * 60 * 24)
-                    decay_half_life = 30
-                    recency_score = 1.0 / (1 + (days_ago / decay_half_life))
-
-                    # Punteggio Combinato
-                    current_score = (severity_score * WEIGHT_CLUSTER_SIZE) + (recency_score * WEIGHT_RECENCY_SCORE)
-
-                    if current_score > best_risk_score:
-                        best_risk_score = current_score
-                        matched_hotspot_id = hotspot['id']
-
-            # 2. Assegna Punteggio Base se il report non è in un Hotspot noto
-            if not is_in_hotspot:
-                MAX_SEVERITY = 5
-                best_risk_score = (report['severity'] / MAX_SEVERITY) * 0.20
-
-            # 3. Formatta il risultato e aggiorna il conteggio rischio alto
-            risk_level = 'HIGH' if best_risk_score >= 0.5 else 'LOW'
-            if risk_level == 'HIGH': high_risk_reports += 1
-
-            report['id'] = report_unique_id
-            report['risk_level'] = risk_level
-            report['risk_score'] = round(best_risk_score * 100, 2)
-            report['hotspot_match'] = is_in_hotspot
+            if report['risk_level'] == 'HIGH':
+                high_risk_count += 1
 
             reports_successfully_analyzed.append(report)
 
             # 4. Aggiorna lo Storico in Memoria (preparazione riga)
+            # RECUPERO DATA ORIGINALE: Se il report ha già un timestamp (es. ricalcolo), usa quello.
             now_utc = pd.Timestamp.now(tz='UTC')
+            original_date = report.get('timestamp') or report.get('DataOra_DT') or now_utc
+
+            # Assicuriamoci che sia un oggetto Timestamp
+            if isinstance(original_date, str):
+                try: original_date = pd.to_datetime(original_date)
+                except: original_date = now_utc
+
             new_row = {
                 'id': report_unique_id,
-                'lat': report['lat'], 'lon': report['lon'],
-                'DataOra_DT': now_utc, 'cluster': matched_hotspot_id,
-                'DataOra': now_utc.strftime('%Y-%m-%d %H:%M:%S'),
-                'event_type': report.get('event_type'), 'severity': report.get('severity')
+                'lat': report['lat'], 'lon': report.get('lon') or report.get('lng'),
+                'DataOra_DT': original_date,
+                'cluster': report['matched_cluster_id'],
+                'DataOra': original_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'event_type': report.get('event_type'),
+                'severity': report.get('severity')
             }
             new_historical_rows.append(new_row)
 
-            # 5. Aggiorna la dimensione dell'hotspot in memoria
-            if is_in_hotspot:
+            # 5. Aggiorna la dimensione dell'hotspot in memoria per calcoli real-time successivi
+            if report['hotspot_match']:
                 for hotspot in self.hotspots:
-                    if hotspot['id'] == matched_hotspot_id:
+                    if hotspot['id'] == report['matched_cluster_id']:
                         hotspot['size'] += 1
                         break
 
         # 6. Concatenazione dei nuovi report al DataFrame storico (Aggiornamento globale)
         if new_historical_rows:
             df_new_reports = pd.DataFrame(new_historical_rows)
-            # Assicura che vengano usate solo colonne presenti nello storico
             self.df_historical = pd.concat([self.df_historical, df_new_reports], ignore_index=True)
             self.n_historical_rows = len(self.df_historical)
 
         if reports_successfully_analyzed:
             logging.info(f"MODEL: Report analizzato (PRE-SAVE): {reports_successfully_analyzed[0]}")
 
-        # Questo garantisce che i dati siano persistenti e disponibili per futuri calcoli.
-        self.repository.save_analyzed_reports(reports)
+        # Persistenza tramite Repository
+        self.repository.save_analyzed_reports(reports_successfully_analyzed)
 
         return {
             "status": "ANALYSIS_COMPLETE",
             "historical_hotspots_count": len(self.hotspots),
             "total_reports_analyzed": len(reports),
-            "high_risk_reports": high_risk_reports,
-            "analyzed_reports": reports,
+            "high_risk_reports": high_risk_count,
             "historical_data_loaded_rows": self.n_historical_rows
         }
+
+    def update_existing_reports_risk(self, reports_list: List[Dict]):
+        """
+        Ricalcola il rischio per i report già presenti nel database
+        basandosi sulla nuova configurazione degli Hotspot.
+        """
+        if not reports_list: return
+
+        print(f"MODEL: Ricalcolo rischio per {len(reports_list)} report esistenti...")
+        updated_reports = [self._analyze_report_logic(r) for r in reports_list]
+
+        self.repository.save_analyzed_reports(updated_reports)
+        print(f"MODEL: Aggiornamento completato con successo.")
+
+    def get_clustering_metrics(self) -> Dict:
+        """
+        Calcola i parametri di bontà del clustering (Silhouette e Coesione).
+        """
+        # Verifica se abbiamo dati e se il clustering è stato eseguito
+        if self.df_historical.empty or 'cluster' not in self.df_historical.columns or not self.hotspots:
+            return {"silhouette": 0, "cohesion": 0, "n_clusters": 0}
+
+        # 1. Recupera etichette e coordinate direttamente dai dati storici
+        # Filtra il rumore (label -1) per il calcolo della Silhouette
+        valid_data = self.df_historical[self.df_historical['cluster'] != -1]
+
+        silhouette = 0.0
+        n_clusters = len(self.hotspots)
+
+        # Silhouette richiede almeno 2 cluster distinti e dati validi
+        if n_clusters > 1 and len(valid_data) > n_clusters:
+            coords = valid_data[['lat', 'lon']].values
+            labels = valid_data['cluster'].values
+
+            # Calcolo su dati in radianti per coerenza con metrica haversine
+            try:
+                silhouette = silhouette_score(np.radians(coords), labels, metric='haversine')
+            except Exception as e:
+                logging.warning(f"Errore calcolo Silhouette: {e}")
+                silhouette = 0.0
+
+        # 2. Coesione: Distanza media dal centroide
+        total_cohesion = 0
+        count = 0
+
+        for hotspot in self.hotspots:
+            pts = hotspot.get('points', [])
+            if not pts: continue
+
+            center = (hotspot['center_lat'], hotspot['center_lng'])
+            # Calcola la distanza di ogni punto dal centro del suo cluster
+            distances = [great_circle((p['lat'], p['lon']), center).meters for p in pts]
+
+            if distances:
+                avg_dist = np.mean(distances)
+                total_cohesion += avg_dist
+                count += 1
+
+        avg_cohesion_meters = round(total_cohesion / count, 2) if count > 0 else 0
+
+        return {
+            "silhouette": round(silhouette, 3),   #(-1 a 1)
+            "cohesion_avg_m": avg_cohesion_meters, #(minore = più compatto)
+            "n_clusters": n_clusters,
+            "execution_time": self.execution_time
+        }
+
+    def _run_kmeans_clustering(self):
+        """
+        PIPELINE B: K-Means (Centroid-based).
+        """
+        if self.df_historical.empty: return
+
+        print(f"MODEL: Esecuzione Pipeline K-MEANS con K={self.n_clusters_k}...")
+
+        # Sicurezza: K non può essere maggiore del numero di punti disponibili
+        k_effettivo = min(self.n_clusters_k, len(self.df_historical))
+
+        coords = self.df_historical[['lat', 'lon']].values
+
+        kmeans = KMeans(n_clusters=k_effettivo, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(coords)
+
+        self.df_historical['cluster'] = labels
+        all_hotspots = []
+
+        # Costruzione Hotspots
+        for cluster_id in range(self.n_clusters_k):
+            cluster_data = self.df_historical.loc[self.df_historical['cluster'] == cluster_id]
+            if cluster_data.empty: continue
+
+            member_points = [{'lat': float(r['lat']), 'lon': float(r['lon'])} for _, r in cluster_data.iterrows()]
+
+            centroid = kmeans.cluster_centers_[cluster_id]
+
+            all_hotspots.append({
+                'id': int(cluster_id),
+                'center_lat': float(centroid[0]),
+                'center_lng': float(centroid[1]),
+                'size': int(len(cluster_data)),
+                'points': member_points
+            })
+
+        self.hotspots = sorted(all_hotspots, key=lambda x: x['size'], reverse=True)

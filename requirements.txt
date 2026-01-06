@@ -9,3 +9,10 @@ numpy==1.26.2
 requests==2.32.4
 geopy==2.4.0
 firebase-admin==6.6.0
+
+streamlit==1.30.0
+folium==0.15.1
+streamlit-folium==0.17.0
+google-cloud-firestore==2.14.0
+scipy==1.10.0
+matplotlib==3.7.0
