@@ -24,7 +24,7 @@ def is_in_campania(lat, lon):
             CAMPANIA_BOX["min_lon"] <= lon <= CAMPANIA_BOX["max_lon"])
 
 # Configurazione Pagina
-st.set_page_config(page_title="Emergency AI - Analisi Territoriale", layout="wide")
+st.set_page_config(page_title="SAfeGuard-AI - Analisi Territoriale", layout="wide")
 
 # Percorsi file e configurazione credenziali
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -133,7 +133,8 @@ def elimina_tutti_report():
     return count
 
 # --- UI ---
-st.title("🛡️ Emergency AI Dashboard")
+st.title("🛡️ SAfeGuard-AI")
+st.markdown("---")
 menu = st.radio("Seleziona Modalità:", ["Mappa & Analisi", "Invia Segnalazione"], horizontal=True)
 
 # Forza il ricaricamento della mappa quando si cambia tab
@@ -158,6 +159,11 @@ try:
         st.session_state['algorithm_type'] = "DBSCAN (Density)"
     if 'n_clusters_k' not in st.session_state:
         st.session_state['n_clusters_k'] = 5
+
+    col1, col2, col3 = st.sidebar.columns([1, 4, 1])
+    with col2:
+        st.image("src/logo.png", use_column_width=True)
+    st.sidebar.markdown("---")
 
     st.sidebar.header("⚙️ Parametri AI")
 
