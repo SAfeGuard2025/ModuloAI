@@ -194,10 +194,15 @@ try:
     val_top_k = st.sidebar.number_input("Top Hotspot", 0, 100, 10)
 
     if st.sidebar.button("🔄 Ricalcola Hotspots"):
-        print(f"DEBUG: Render Pagina - Valori correnti: R={val_radius}, P={val_min_pts}")
+        t_start = time.time()
         with st.spinner(f"Addestramento {val_algo.upper()} in corso..."):
             n = pulisci_e_ricalcola(val_algo, st.session_state.radius, st.session_state.min_pts, val_k)
+
+            durata_ms = round((time.time() - t_start) * 1000, 2)
+            st.session_state['last_exec_time'] = durata_ms
+
             st.success(f"Pipeline completata! Generati {n} cluster.")
+            time.sleep(1)
             st.rerun() # Ricarica per vedere le nuove metriche
 
     if st.sidebar.button("🗑️ ELIMINA TUTTI I REPORT", type="primary"):
