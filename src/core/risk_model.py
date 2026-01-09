@@ -14,8 +14,8 @@ import logging
 from core.firestore_repository import FirestoreRepository
 
 # Configurazione del Modello (Logica AI)
-HOTSPOT_RADIUS_KM = 2.0         # Raggio del cluster per DBSCAN
-MIN_DENSITY_POINTS = 5          # Numero minimo di punti per formare un cluster (Hotspot)
+HOTSPOT_RADIUS_KM = 2.2         # Raggio del cluster per DBSCAN
+MIN_DENSITY_POINTS = 8          # Numero minimo di punti per formare un cluster (Hotspot)
 FILE_NAME = '911_campania_random_types.csv'
 
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), FILE_NAME)
@@ -115,6 +115,13 @@ class RiskModel:
 
                 # 3. Concatenazione dei due dataset
                 self.df_historical = pd.concat([df_csv, df_db[cols_to_merge]], ignore_index=True)
+
+                #Verifica se la colonna 'id' esiste prima di de-duplicare
+                if 'id' in self.df_historical.columns:
+                    self.df_historical.drop_duplicates(subset=['id'], inplace=True, keep='last')
+                else:
+                    # Se manca l'id, usa le coordinate e il tempo come chiave di unicità approssimativa
+                    self.df_historical.drop_duplicates(subset=['lat', 'lon', 'DataOra'], inplace=True, keep='last')
 
                 print(f"MODEL: Dati uniti! Righe CSV: {len(df_csv)} + Righe DB: {len(df_db)} = Totale storico: {len(self.df_historical)}.")
             else:
