@@ -62,8 +62,20 @@ def format_recency(dt_obj):
 def normalize_df(df):
     """Uniforma i nomi delle colonne del DB"""
     if df.empty: return df
-    cols = {'lng': 'lon', 'type': 'event_type', 'longitude': 'lon', 'latitude': 'lat'}
-    return df.rename(columns=cols)
+    # Mappa delle ridenominazioni desiderate
+    rename_map = {'lng': 'lon', 'longitude': 'lon', 'latitude': 'lat', 'type': 'event_type'}
+
+    for old_col, new_col in rename_map.items():
+        if old_col in df.columns:
+            if new_col in df.columns:
+                # Se la colonna di destinazione esiste già, riempi i buchi e rimuovi la vecchia
+                df[new_col] = df[new_col].fillna(df[old_col])
+                df.drop(columns=[old_col], inplace=True)
+            else:
+                # Altrimenti rinomina semplicemente
+                df.rename(columns={old_col: new_col}, inplace=True)
+
+    return df
 
 @st.cache_data(ttl=10)
 def load_all_data():

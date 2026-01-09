@@ -14,8 +14,8 @@ import logging
 from core.firestore_repository import FirestoreRepository
 
 # Configurazione del Modello (Logica AI)
-HOTSPOT_RADIUS_KM = 2.2         # Raggio del cluster per DBSCAN
-MIN_DENSITY_POINTS = 8          # Numero minimo di punti per formare un cluster (Hotspot)
+HOTSPOT_RADIUS_KM = 2.0         # Raggio del cluster per DBSCAN
+MIN_DENSITY_POINTS = 5          # Numero minimo di punti per formare un cluster (Hotspot)
 FILE_NAME = '911_campania_random_types.csv'
 
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), FILE_NAME)
@@ -85,11 +85,21 @@ class RiskModel:
             if analyzed_reports:
                 df_db = pd.DataFrame(analyzed_reports)
 
+                # 1. Normalizza Longitudine
                 if 'lng' in df_db.columns:
-                    df_db.rename(columns={'lng': 'lon'}, inplace=True)
+                    if 'lon' in df_db.columns:
+                        df_db['lon'] = df_db['lon'].fillna(df_db['lng']) # Unisci i dati
+                        df_db.drop(columns=['lng'], inplace=True)        # Rimuovi il duplicato
+                    else:
+                        df_db.rename(columns={'lng': 'lon'}, inplace=True)
 
+                # 2. Normalizza Event Type
                 if 'type' in df_db.columns:
-                    df_db.rename(columns={'type': 'event_type'}, inplace=True)
+                    if 'event_type' in df_db.columns:
+                        df_db['event_type'] = df_db['event_type'].fillna(df_db['type'])
+                        df_db.drop(columns=['type'], inplace=True)
+                    else:
+                        df_db.rename(columns={'type': 'event_type'}, inplace=True)
 
                 # Prepara le colonne del DB in modo che corrispondano al CSV il più possibile
                 # Usa 'timestamp' come DataOra per i report del DB
