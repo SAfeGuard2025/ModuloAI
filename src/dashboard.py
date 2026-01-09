@@ -26,6 +26,31 @@ def is_in_campania(lat, lon):
 # Configurazione Pagina
 st.set_page_config(page_title="SAfeGuard-AI - Analisi Territoriale", layout="wide")
 
+# --- INIZIALIZZAZIONE PARAMETRI DEFAULT (Session State) ---
+if 'radius' not in st.session_state:
+    st.session_state.radius = 2.2
+if 'min_pts' not in st.session_state:
+    st.session_state.min_pts = 8
+if 'algorithm_type' not in st.session_state:
+    st.session_state['algorithm_type'] = "DBSCAN (Density)"
+if 'n_clusters_k' not in st.session_state:
+    st.session_state['n_clusters_k'] = 5
+
+if 'refresh_count' not in st.session_state:
+    st.session_state.refresh_count = 0
+if 'last_map_click' not in st.session_state:
+    st.session_state.last_map_click = (40.85, 14.27)
+
+if 'model_metrics' not in st.session_state or st.session_state.model_metrics is None:
+    with st.spinner("Inizializzazione AI..."):
+        # Crea un modello con i parametri standard per ottenere le metriche reali
+        initial_model = RiskModel(
+            radius=st.session_state.radius,
+            min_pts=st.session_state.min_pts,
+            algorithm='dbscan'
+        )
+        st.session_state.model_metrics = initial_model.get_clustering_metrics()
+
 # Percorsi file e configurazione credenziali
 current_dir = os.path.dirname(os.path.abspath(__file__))
 creds_path = os.path.join(current_dir, "safeguard-c08.json")
@@ -35,11 +60,20 @@ def get_db():
     """Inizializza il client Firestore"""
     return firestore.Client.from_service_account_json(creds_path)
 
-# --- GESTIONE REFRESH ---
-if 'refresh_count' not in st.session_state:
-    st.session_state.refresh_count = 0
-if 'last_map_click' not in st.session_state:
-    st.session_state.last_map_click = (40.85, 14.27)
+# Lista dei parametri che influenzano il modello AI
+current_params = {
+    'radius': st.session_state.radius,
+    'min_pts': st.session_state.min_pts,
+    'algo': st.session_state.algorithm_type,
+    'k': st.session_state.n_clusters_k
+}
+
+# Se uno qualsiasi dei parametri è cambiato dall'ultima esecuzione, pulisci
+if 'last_params' in st.session_state:
+    if st.session_state.last_params != current_params:
+        st.sidebar.warning("⚠️ Parametri modificati. Clicca 'Ricalcola Hotspots' per applicare.")
+
+st.session_state.last_params = current_params
 
 map_output = None
 
@@ -62,8 +96,20 @@ def format_recency(dt_obj):
 def normalize_df(df):
     """Uniforma i nomi delle colonne del DB"""
     if df.empty: return df
-    cols = {'lng': 'lon', 'type': 'event_type', 'longitude': 'lon', 'latitude': 'lat'}
-    return df.rename(columns=cols)
+    # Mappa delle ridenominazioni desiderate
+    rename_map = {'lng': 'lon', 'longitude': 'lon', 'latitude': 'lat', 'type': 'event_type'}
+
+    for old_col, new_col in rename_map.items():
+        if old_col in df.columns:
+            if new_col in df.columns:
+                # Se la colonna di destinazione esiste già, riempi i buchi e rimuovi la vecchia
+                df[new_col] = df[new_col].fillna(df[old_col])
+                df.drop(columns=[old_col], inplace=True)
+            else:
+                # Altrimenti rinomina semplicemente
+                df.rename(columns={old_col: new_col}, inplace=True)
+
+    return df
 
 @st.cache_data(ttl=10)
 def load_all_data():
@@ -202,6 +248,8 @@ try:
     if st.sidebar.button("🔄 Ricalcola Hotspots"):
         t_start = time.time()
         with st.spinner(f"Addestramento {val_algo.upper()} in corso..."):
+            st.cache_data.clear()
+
             n = pulisci_e_ricalcola(val_algo, st.session_state.radius, st.session_state.min_pts, val_k)
 
             durata_ms = round((time.time() - t_start) * 1000, 2)
@@ -337,8 +385,16 @@ try:
                     icon=folium.Icon(color="green", icon="info-sign"),
                 ).add_to(m)
 
+        # Recupero metriche con fallback totale per evitare NoneType
+        metrics = st.session_state.get('model_metrics', {})
+        if metrics is None:
+            metrics = {"n_clusters": 0}
+
         # KEY DINAMICA per forzare il ricaricamento al rientro nella Tab
-        map_output = st_folium(m, width=1400, height=600, key=f"map_{st.session_state.refresh_count}")
+        n_clusters_safe = metrics.get('n_clusters', 0)
+        map_key = f"map_{st.session_state.refresh_count}_{n_clusters_safe}"
+
+        map_output = st_folium(m, width=1400, height=600, key=map_key)
 
         if map_output and map_output.get("last_clicked"):
             st.session_state.last_map_click = (

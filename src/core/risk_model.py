@@ -85,11 +85,21 @@ class RiskModel:
             if analyzed_reports:
                 df_db = pd.DataFrame(analyzed_reports)
 
+                # 1. Normalizza Longitudine
                 if 'lng' in df_db.columns:
-                    df_db.rename(columns={'lng': 'lon'}, inplace=True)
+                    if 'lon' in df_db.columns:
+                        df_db['lon'] = df_db['lon'].fillna(df_db['lng']) # Unisci i dati
+                        df_db.drop(columns=['lng'], inplace=True)        # Rimuovi il duplicato
+                    else:
+                        df_db.rename(columns={'lng': 'lon'}, inplace=True)
 
+                # 2. Normalizza Event Type
                 if 'type' in df_db.columns:
-                    df_db.rename(columns={'type': 'event_type'}, inplace=True)
+                    if 'event_type' in df_db.columns:
+                        df_db['event_type'] = df_db['event_type'].fillna(df_db['type'])
+                        df_db.drop(columns=['type'], inplace=True)
+                    else:
+                        df_db.rename(columns={'type': 'event_type'}, inplace=True)
 
                 # Prepara le colonne del DB in modo che corrispondano al CSV il più possibile
                 # Usa 'timestamp' come DataOra per i report del DB
@@ -105,6 +115,13 @@ class RiskModel:
 
                 # 3. Concatenazione dei due dataset
                 self.df_historical = pd.concat([df_csv, df_db[cols_to_merge]], ignore_index=True)
+
+                #Verifica se la colonna 'id' esiste prima di de-duplicare
+                if 'id' in self.df_historical.columns:
+                    self.df_historical.drop_duplicates(subset=['id'], inplace=True, keep='last')
+                else:
+                    # Se manca l'id, usa le coordinate e il tempo come chiave di unicità approssimativa
+                    self.df_historical.drop_duplicates(subset=['lat', 'lon', 'DataOra'], inplace=True, keep='last')
 
                 print(f"MODEL: Dati uniti! Righe CSV: {len(df_csv)} + Righe DB: {len(df_db)} = Totale storico: {len(self.df_historical)}.")
             else:
