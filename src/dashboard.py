@@ -349,41 +349,41 @@ try:
                         ).add_to(m)
                     except Exception as e:
                         continue # Salta se i punti sono allineati o errati
+        if show_reports:
+            for _, r in df_reports.iterrows():
+                if 'lat' in r and 'lon' in r and pd.notnull(r['lat']):
+                    # Controllo Zona
+                    in_zone = is_in_campania(r['lat'], r['lon'])
 
-        for _, r in df_reports.iterrows():
-            if 'lat' in r and 'lon' in r and pd.notnull(r['lat']):
-                # Controllo Zona
-                in_zone = is_in_campania(r['lat'], r['lon'])
+                    # Logica Colore/Icona
+                    if not in_zone:
+                        color = "gray"
+                        tooltip_text = "⚠️ FUORI ZONA"
+                    elif r.get('risk_level') == 'HIGH':
+                        color = "#E63946" # Rosso
+                        tooltip_text = f"Rischio Alto: {r.get('risk_score', 0)}%"
+                    else:
+                        color = "#457B9D" # Blu
+                        tooltip_text = f"Rischio: {r.get('risk_score', 0)}%"
 
-                # Logica Colore/Icona
-                if not in_zone:
-                    color = "gray"
-                    tooltip_text = "⚠️ FUORI ZONA"
-                elif r.get('risk_level') == 'HIGH':
-                    color = "#E63946" # Rosso
-                    tooltip_text = f"Rischio Alto: {r.get('risk_score', 0)}%"
-                else:
-                    color = "#457B9D" # Blu
-                    tooltip_text = f"Rischio: {r.get('risk_score', 0)}%"
+                    folium.CircleMarker(
+                        location=[r['lat'], r['lon']],
+                        radius=6 if not in_zone else 5, # Leggermente più grande se fuori zona
+                        color=color,
+                        fill=True,
+                        fill_opacity=0.7,
+                        popup=tooltip_text,
+                        tooltip=tooltip_text
+                    ).add_to(m)
 
-                folium.CircleMarker(
-                    location=[r['lat'], r['lon']],
-                    radius=6 if not in_zone else 5, # Leggermente più grande se fuori zona
-                    color=color,
-                    fill=True,
-                    fill_opacity=0.7,
-                    popup=tooltip_text,
-                    tooltip=tooltip_text
-                ).add_to(m)
-
-            #Pin dell'ultimo click dell'utente
-            if st.session_state.last_map_click:
-                last_lat, last_lon = st.session_state.last_map_click
-                folium.Marker(
-                    location=[last_lat, last_lon],
-                    popup="Punto selezionato",
-                    icon=folium.Icon(color="green", icon="info-sign"),
-                ).add_to(m)
+                #Pin dell'ultimo click dell'utente
+                if st.session_state.last_map_click:
+                    last_lat, last_lon = st.session_state.last_map_click
+                    folium.Marker(
+                        location=[last_lat, last_lon],
+                        popup="Punto selezionato",
+                        icon=folium.Icon(color="green", icon="info-sign"),
+                    ).add_to(m)
 
         # Recupero metriche con fallback totale per evitare NoneType
         metrics = st.session_state.get('model_metrics', {})
